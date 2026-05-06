@@ -61,7 +61,7 @@ pipeline {
     // ── 2. Nettoyage ─────────────────────────────────────────
     stage('🧹 Clean') {
       steps {
-        dir('app') {
+        dir('.') {
           sh 'mvn clean -q'
         }
       }
@@ -70,7 +70,7 @@ pipeline {
     // ── 3. Compilation ───────────────────────────────────────
     stage('⚙️ Compile') {
       steps {
-        dir('app') {
+        dir('.') {
           sh 'mvn compile -q'
         }
       }
@@ -87,7 +87,7 @@ pipeline {
     // ── 4. Tests unitaires + Couverture JaCoCo ───────────────
 stage('🧪 Tests + Coverage') {
   steps {
-    dir('app') {
+    dir('.') {
       sh 'mvn test jacoco:report'
     }
   }
@@ -133,7 +133,7 @@ stage('🧪 Tests + Coverage') {
     // ── 5. Packaging ─────────────────────────────────────────
     stage('📦 Package') {
       steps {
-        dir('app') {
+        dir('.') {
           sh 'mvn package -DskipTests -q'
           script {
             def jar = sh(
@@ -153,7 +153,7 @@ stage('🧪 Tests + Coverage') {
         catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE')
       }
       steps {
-        dir('app') {
+        dir('.') {
           withSonarQubeEnv('sq1') {
             sh """
               /var/jenkins_home/tools/hudson.tasks.Maven_MavenInstallation/M3/bin/mvn \
@@ -199,7 +199,7 @@ stage('🧪 Tests + Coverage') {
         catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE')
       }
       steps {
-        dir('app') {
+        dir('.') {
           script {
             def result = sh(
               script: """
@@ -242,7 +242,7 @@ stage('🧪 Tests + Coverage') {
         catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE')
       }
       steps {
-        dir('app') {
+        dir('.') {
           script {
             def result = sh(
               script: 'mvn deploy -DskipTests -Ddependency-check.skip=true --settings /var/jenkins_home/.m2/settings.xml 2>&1',
@@ -258,7 +258,7 @@ stage('🧪 Tests + Coverage') {
     // ── 10. Build Docker ──────────────────────────────────────
     stage('🐳 Build Docker') {
       steps {
-        dir('app') {
+        dir('.') {
           script {
             sh """
               docker build \
