@@ -375,25 +375,14 @@ stage('🧪 Tests + Coverage') {
       steps {
         script {
           sh """
-            docker stop ${APP_NAME} 2>/dev/null || true
-            docker rm   ${APP_NAME} 2>/dev/null || true
-            docker run -d \
-              --name ${APP_NAME} \
-              --network ${DOCKER_NETWORK} \
-              --restart unless-stopped \
-              -p ${APP_PORT}:8080 \
-              -e DB_HOST=pfe-postgres \
-              -e DB_PORT=5432 \
-              -e DB_NAME=devsecops \
-              -e DB_USER=devsecops \
-              -e DB_PASSWORD=devsecops123 \
-              -e APP_VERSION=${env.IMAGE_TAG} \
-              -l build.number=${env.BUILD_NUMBER} \
-              -l build.branch=${env.BUILD_BRANCH} \
-              ${DOCKER_IMAGE}:latest
+            kubectl set image deployment/app-test \
+              app-test=souhaiel11/${DOCKER_IMAGE}:${env.IMAGE_TAG} \
+              -n pfe-devsecops
+            kubectl rollout status deployment/app-test \
+              -n pfe-devsecops --timeout=120s
           """
           env.DEPLOY_STATUS = 'SUCCESS'
-          echo "Application déployée : ${DOCKER_IMAGE}:${env.IMAGE_TAG}"
+          echo "Application déployée : souhaiel11/${DOCKER_IMAGE}:${env.IMAGE_TAG}"
         }
       }
       post {
