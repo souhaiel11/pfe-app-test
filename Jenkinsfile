@@ -452,7 +452,11 @@ stage('🧪 Tests + Coverage') {
             "sonar_project_key" : "${env.SONAR_PROJECT_KEY}",
             "image_tag"         : "${env.IMAGE_TAG ?: 'latest'}",
             "quality_gate"      : "${env.QUALITY_GATE_STATUS ?: 'UNKNOWN'}",
-            "duration_ms"       : ${currentBuild.duration}
+            "duration_ms"       : ${currentBuild.duration},
+            "trivy_critical"    : ${env.TRIVY_CRITICAL ?: 0},
+            "trivy_high"        : ${env.TRIVY_HIGH ?: 0},
+            "trivy_status"      : "${env.TRIVY_STATUS ?: 'UNKNOWN'}",
+            "trivy_report_url"  : "${env.BUILD_URL}artifact/trivy-report.json"
           }"""
 
           httpRequest(
