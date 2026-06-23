@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pfe-app-test
+  namespace: pfe-devsecops
+  labels:
+    app: pfe-app-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pfe-app-test
+  template:
+    metadata:
+      labels:
+        app: pfe-app-test
+    spec:
+      containers:
+        - name: pfe-app-test
+          image: pfe-app-test:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pfe-app-test
+  namespace: pfe-devsecops
+spec:
+  type: NodePort
+  selector:
+    app: pfe-app-test
+  ports:
+    - port: 80
+      targetPort: 8080
+      nodePort: 30003
