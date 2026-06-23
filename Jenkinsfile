@@ -1,6 +1,5 @@
 pipeline {
     agent any
-
     environment {
         APP_NAME = 'pfe-app-test'
         IMAGE_NAME = "pfe-app-test"
@@ -10,14 +9,11 @@ pipeline {
         K8S_NAMESPACE = 'pfe-devsecops'
         ZAP_TARGET_URL = 'http://192.168.49.2:30003'
     }
-
     tools {
-        maven 'Maven 3.8.6'
-        jdk 'JDK 11'
+        maven 'M3'
+        
     }
-
     stages {
-
         // Stage 1 — Checkout
         stage('Checkout') {
             steps {
@@ -27,7 +23,6 @@ pipeline {
                 sh 'echo "Commit: $(git rev-parse --short HEAD)"'
             }
         }
-
         // Stage 2 — Build
         stage('Build') {
             steps {
@@ -40,7 +35,6 @@ pipeline {
                 }
             }
         }
-
         // Stage 3 — Tests + JaCoCo Coverage
         stage('Test') {
             steps {
@@ -62,7 +56,6 @@ pipeline {
                 }
             }
         }
-
         // Stage 4 — SonarQube SAST
         stage('SonarQube Analysis') {
             steps {
@@ -84,7 +77,6 @@ pipeline {
                 }
             }
         }
-
         // Stage 5 — Trivy Container Scan
         stage('Trivy Scan') {
             steps {
@@ -92,7 +84,6 @@ pipeline {
                 sh """
                     # Build image pour scan
                     docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
-
                     # Scan Trivy sur l'image avec rapport JSON
                     trivy image \
                       --format json \
@@ -100,7 +91,6 @@ pipeline {
                       --severity CRITICAL,HIGH,MEDIUM \
                       --no-progress \
                       ${IMAGE_NAME}:${IMAGE_TAG} || true
-
                     echo "Trivy scan terminé — rapport : trivy-report.json"
                     cat trivy-report.json | head -50
                 """
@@ -111,7 +101,6 @@ pipeline {
                 }
             }
         }
-
         // Stage 6 — OWASP Dependency Check
         stage('OWASP Dependency Check') {
             steps {
@@ -138,7 +127,6 @@ pipeline {
                 }
             }
         }
-
         // Stage 7 — Docker Build & Push Nexus
         stage('Docker Build & Push') {
             steps {
@@ -150,7 +138,6 @@ pipeline {
                 """
             }
         }
-
         // Stage 8 — Deploy to Minikube
         stage('Deploy to Minikube') {
             steps {
@@ -158,15 +145,12 @@ pipeline {
                 sh """
                     # Charger l'image dans Minikube
                     minikube image load ${IMAGE_NAME}:${IMAGE_TAG} -p minikube || true
-
                     # Appliquer les manifests Kubernetes
                     kubectl apply -f k8s/ -n ${K8S_NAMESPACE} || true
-
                     # Mettre à jour l'image du deployment
                     kubectl set image deployment/${APP_NAME} \
                       ${APP_NAME}=${IMAGE_NAME}:${IMAGE_TAG} \
                       -n ${K8S_NAMESPACE} || true
-
                     # Attendre le rollout
                     kubectl rollout status deployment/${APP_NAME} \
                       -n ${K8S_NAMESPACE} \
@@ -174,7 +158,6 @@ pipeline {
                 """
             }
         }
-
         // Stage 9 — ZAP DAST Scan
         stage('ZAP DAST Scan') {
             steps {
@@ -182,7 +165,6 @@ pipeline {
                 sh """
                     # Attendre que l'app soit disponible
                     sleep 15
-
                     # ZAP Baseline Scan
                     docker run --rm \
                       --network=host \
@@ -201,7 +183,6 @@ pipeline {
                 }
             }
         }
-
         // Stage 10 — Notify Webhook DevSecOps Platform
         stage('Notify Platform') {
             steps {
@@ -210,19 +191,16 @@ pipeline {
                     def buildStatus = currentBuild.currentResult ?: 'SUCCESS'
                     def trivyReport = ''
                     def zapReport = ''
-
                     try {
                         trivyReport = readFile("${env.WORKSPACE}/trivy-report.json")
                     } catch (e) {
                         trivyReport = '{"Results":[]}'
                     }
-
                     try {
                         zapReport = readFile("${env.WORKSPACE}/zap-report.json")
                     } catch (e) {
                         zapReport = '{"site":[]}'
                     }
-
                     def payload = """
                     {
                         "projectName": "${APP_NAME}",
@@ -237,7 +215,6 @@ pipeline {
                         "timestamp": "${new Date().format('yyyy-MM-dd HH:mm:ss')}"
                     }
                     """
-
                     sh """
                         curl -X POST ${BACKEND_WEBHOOK_URL} \
                           -H 'Content-Type: application/json' \
@@ -249,7 +226,6 @@ pipeline {
             }
         }
     }
-
     post {
         always {
             echo "=== BUILD ${currentBuild.currentResult} — Build #${BUILD_NUMBER} ==="
