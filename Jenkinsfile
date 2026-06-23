@@ -229,7 +229,7 @@ pipeline {
     post {
         always {
             echo "=== BUILD ${currentBuild.currentResult} — Build #${BUILD_NUMBER} ==="
-            cleanWs()
+            deleteDir()
         }
         success {
             echo 'Pipeline terminé avec succès'
