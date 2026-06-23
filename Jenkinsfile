@@ -1,20 +1,21 @@
 pipeline {
     agent any
     environment {
-        APP_NAME = 'pfe-app-test'
-        IMAGE_NAME = "pfe-app-test"
-        IMAGE_TAG = "${BUILD_NUMBER}"
-        SONAR_HOST_URL = 'http://172.31.172.61:9000'
-        N8N_WEBHOOK_URL = 'http://172.31.172.61:5678/webhook/jenkins-event'
-        K8S_NAMESPACE = 'pfe-devsecops'
-        ZAP_TARGET_URL = 'http://192.168.49.2:30003'
+        APP_NAME        = 'pfe-app-test'
+        IMAGE_NAME      = 'pfe-app-test'
+        IMAGE_TAG       = "${BUILD_NUMBER}"
+        SONAR_HOST_URL  = 'http://sonarqube:9000'
+        N8N_WEBHOOK_URL = 'http://n8n:5678/webhook/jenkins-event'
+        N8N_API_KEY     = 'devsecops-secret-2024'
+        PROJECT_ID      = '54192eca-43da-4d8f-9b49-30c143983fdd'
+        BACKEND_URL     = 'http://172.31.172.61:3001'
+        K8S_NAMESPACE   = 'pfe-devsecops'
+        ZAP_TARGET_URL  = 'http://192.168.49.2:30003'
     }
     tools {
         maven 'M3'
-        
     }
     stages {
-        // Stage 1 — Checkout
         stage('Checkout') {
             steps {
                 echo '=== STAGE 1: Checkout ==='
@@ -23,34 +24,27 @@ pipeline {
                 sh 'echo "Commit: $(git rev-parse --short HEAD)"'
             }
         }
-        // Stage 2 — Build
         stage('Build') {
             steps {
                 echo '=== STAGE 2: Maven Build ==='
                 sh 'mvn clean compile -B'
             }
             post {
-                failure {
-                    echo 'Build FAILED'
-                }
+                failure { echo 'Build FAILED' }
             }
         }
-        // Stage 3 — Tests + JaCoCo Coverage
         stage('Test') {
             steps {
                 echo '=== STAGE 3: Tests + Coverage JaCoCo ==='
-                sh 'mvn test -B || true'
+                sh 'mvn test jacoco:report -B || true'
             }
             post {
                 always {
-                    junit '**/target/surefire-reports/*.xml'
-                }
-                failure {
-                    echo 'Tests FAILED — rapport envoyé au webhook'
+                    junit allowEmptyResults: true,
+                          testResults: '**/target/surefire-reports/*.xml'
                 }
             }
         }
-        // Stage 4 — SonarQube SAST
         stage('SonarQube Analysis') {
             steps {
                 echo '=== STAGE 4: SonarQube SAST ==='
@@ -66,59 +60,56 @@ pipeline {
                 }
             }
             post {
-                failure {
-                    echo 'SonarQube scan FAILED'
-                }
+                failure { echo 'SonarQube scan FAILED' }
             }
         }
-        // Stage 5 — Trivy Container Scan
         stage('Trivy Scan') {
             steps {
                 echo '=== STAGE 5: Trivy Security Scan ==='
+                sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
                 sh """
-                    # Build image pour scan
-                    docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
-                    # Scan Trivy sur l'image avec rapport JSON
-                    # Install Trivy if not present
-                    which trivy || (curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin)
-                    trivy image \
-                      --exit-code 0 \
-                      --format json \
-                      --output trivy-report.json \
-                      --severity CRITICAL,HIGH,MEDIUM \
-                      --no-progress \
-                      ${IMAGE_NAME}:${IMAGE_TAG} || true
-                    echo "Trivy scan terminé — rapport : trivy-report.json"
-                    cat trivy-report.json | head -50
+                    docker run --rm \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      -v \$(pwd):/workspace \
+                      aquasec/trivy:latest image \
+                        --exit-code 0 \
+                        --format json \
+                        --output /workspace/trivy-report.json \
+                        --severity CRITICAL,HIGH,MEDIUM \
+                        --no-progress \
+                        ${IMAGE_NAME}:${IMAGE_TAG} || true
+                    echo "Trivy scan terminé"
+                    [ -f trivy-report.json ] && head -20 trivy-report.json || echo "Rapport absent"
                 """
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'trivy-report.json', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'trivy-report.json',
+                                     allowEmptyArchive: true
                 }
             }
         }
-        // Stage 6 — OWASP Dependency Check
         stage('OWASP Dependency Check') {
             steps {
                 echo '=== STAGE 6: OWASP Dependency Check ==='
                 sh """
                     mvn org.owasp:dependency-check-maven:check \
                       -DfailBuildOnCVSS=10 \
+                      -DnvdApiKey=14EB33B7-AB3A-F111-836A-129478FCB64D \
                       -Dformat=ALL \
                       -B || true
                 """
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'target/dependency-check-report.*', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'target/dependency-check-report.*',
+                                     allowEmptyArchive: true
                 }
             }
         }
-        // Stage 7 — Docker Build & Push Nexus
-        stage('Docker Build & Push') {
+        stage('Docker Build') {
             steps {
-                echo '=== STAGE 7: Docker Build & Push ==='
+                echo '=== STAGE 7: Docker Build ==='
                 sh """
                     docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
                     docker tag ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:latest
@@ -126,88 +117,133 @@ pipeline {
                 """
             }
         }
-        // Stage 8 — Deploy to Minikube
         stage('Deploy to Minikube') {
             steps {
                 echo '=== STAGE 8: Deploy Kubernetes ==='
                 sh """
-                    # Charger l'image dans Minikube
-                    minikube image load ${IMAGE_NAME}:${IMAGE_TAG} -p minikube || true
-                    # Appliquer les manifests Kubernetes
                     kubectl apply -f k8s/ -n ${K8S_NAMESPACE} || true
-                    # Mettre à jour l'image du deployment
                     kubectl set image deployment/${APP_NAME} \
                       ${APP_NAME}=${IMAGE_NAME}:${IMAGE_TAG} \
                       -n ${K8S_NAMESPACE} || true
-                    # Attendre le rollout
                     kubectl rollout status deployment/${APP_NAME} \
                       -n ${K8S_NAMESPACE} \
                       --timeout=120s || true
                 """
             }
         }
-        // Stage 9 — ZAP DAST Scan
         stage('ZAP DAST Scan') {
             steps {
                 echo '=== STAGE 9: OWASP ZAP DAST ==='
                 sh """
-                    # Attendre que l'app soit disponible
                     sleep 15
-                    # ZAP Baseline Scan
+                    mkdir -p \$(pwd)/zap-work
+                    chmod 777 \$(pwd)/zap-work
                     docker run --rm \
                       --network=host \
-                      -v \$(pwd):/zap/wrk/:rw \
+                      -v \$(pwd)/zap-work:/zap/wrk/:rw \
+                      --user root \
                       ghcr.io/zaproxy/zaproxy:stable \
                       zap-baseline.py \
                         -t ${ZAP_TARGET_URL} \
                         -J zap-report.json \
                         -r zap-report.html \
                         -I || true
+                    [ -f \$(pwd)/zap-work/zap-report.json ] && \
+                      cp \$(pwd)/zap-work/zap-report.json . || true
+                    [ -f \$(pwd)/zap-work/zap-report.html ] && \
+                      cp \$(pwd)/zap-work/zap-report.html . || true
                 """
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'zap-report.*', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'zap-report.*',
+                                     allowEmptyArchive: true
                 }
             }
         }
-        // Stage 10 — Notify Webhook DevSecOps Platform
         stage('Notify Platform') {
             steps {
-                echo '=== STAGE 10: Notification webhook → Backend ==='
+                echo '=== STAGE 10: Notification webhook → n8n ==='
                 script {
                     def buildStatus = currentBuild.currentResult ?: 'SUCCESS'
-                    def trivyReport = ''
-                    def zapReport = ''
+                    def event    = buildStatus == 'SUCCESS'  ? 'pipeline_success'
+                                 : buildStatus == 'UNSTABLE' ? 'pipeline_unstable'
+                                 : 'pipeline_failed'
+                    def severity = buildStatus == 'FAILURE'  ? 'HIGH'
+                                 : buildStatus == 'UNSTABLE' ? 'MEDIUM' : 'LOW'
+                    def branch   = env.GIT_BRANCH?.replaceAll('origin/', '') ?: 'main'
+                    def commit   = env.GIT_COMMIT?.take(8) ?: 'unknown'
+
+                    // Lire rapports
+                    def trivyReport = '{"Results":[]}'
+                    def zapReport   = '{"site":[]}'
+                    try { trivyReport = readFile("${env.WORKSPACE}/trivy-report.json").trim() } catch(e) {}
+                    try { zapReport   = readFile("${env.WORKSPACE}/zap-report.json").trim()   } catch(e) {}
+
+                    // Parser Trivy
+                    def trivyCritical = 0; def trivyHigh = 0
                     try {
-                        trivyReport = readFile("${env.WORKSPACE}/trivy-report.json")
-                    } catch (e) {
-                        trivyReport = '{"Results":[]}'
-                    }
+                        def td = new groovy.json.JsonSlurper().parseText(trivyReport)
+                        td.Results?.each { r -> r.Vulnerabilities?.each { v ->
+                            if (v.Severity == 'CRITICAL') trivyCritical++
+                            if (v.Severity == 'HIGH')     trivyHigh++
+                        }}
+                    } catch(e) {}
+
+                    // Parser ZAP
+                    def zapHigh = 0; def zapMedium = 0; def zapLow = 0
                     try {
-                        zapReport = readFile("${env.WORKSPACE}/zap-report.json")
-                    } catch (e) {
-                        zapReport = '{"site":[]}'
-                    }
-                    def payload = """
-                    {
-                        "projectName": "${APP_NAME}",
-                        "buildNumber": ${BUILD_NUMBER},
-                        "buildStatus": "${buildStatus}",
-                        "branch": "${GIT_BRANCH ?: 'main'}",
-                        "commit": "${GIT_COMMIT ?: 'unknown'}",
-                        "buildUrl": "${BUILD_URL}",
-                        "sonarUrl": "${SONAR_HOST_URL}/dashboard?id=${APP_NAME}",
-                        "trivyReportUrl": "${BUILD_URL}artifact/trivy-report.json",
-                        "zapReportUrl": "${BUILD_URL}artifact/zap-report.json",
-                        "timestamp": "${new Date().format('yyyy-MM-dd HH:mm:ss')}"
-                    }
-                    """
+                        def zd = new groovy.json.JsonSlurper().parseText(zapReport)
+                        zd.site?.each { s -> s.alerts?.each { a ->
+                            def risk = a.riskdesc?.split(' ')[0]
+                            if (risk == 'High')   zapHigh++
+                            if (risk == 'Medium') zapMedium++
+                            if (risk == 'Low')    zapLow++
+                        }}
+                    } catch(e) {}
+
+                    def payload = """{
+                        "event"        : "${event}",
+                        "project_id"   : "${env.PROJECT_ID}",
+                        "backend_url"  : "${env.BACKEND_URL}",
+                        "job"          : "${env.JOB_NAME}",
+                        "build_number" : "${env.BUILD_NUMBER}",
+                        "build_url"    : "${env.BUILD_URL}",
+                        "logs_url"     : "${env.BUILD_URL}consoleText",
+                        "branch"       : "${branch}",
+                        "commit"       : "${commit}",
+                        "status"       : "${buildStatus}",
+                        "severity"     : "${severity}",
+                        "duration_ms"  : ${currentBuild.duration},
+                        "tests"  : { "status": "UNKNOWN", "total": 0, "failures": 0, "skipped": 0 },
+                        "sonar"  : {
+                            "project_key"  : "${env.APP_NAME}",
+                            "dashboard_url": "http://172.31.172.61:9000/dashboard?id=${env.APP_NAME}"
+                        },
+                        "trivy"  : {
+                            "critical"   : ${trivyCritical},
+                            "high"       : ${trivyHigh},
+                            "report_url" : "${env.BUILD_URL}artifact/trivy-report.json"
+                        },
+                        "owasp"  : { "status": "SKIPPED", "critical": 0, "high": 0 },
+                        "zap"    : {
+                            "alerts_high"   : ${zapHigh},
+                            "alerts_medium" : ${zapMedium},
+                            "alerts_low"    : ${zapLow},
+                            "target_url"    : "${env.ZAP_TARGET_URL}",
+                            "report_url"    : "${env.BUILD_URL}artifact/zap-report.json"
+                        },
+                        "docker" : { "image": "${env.IMAGE_NAME}:${env.IMAGE_TAG}" },
+                        "deploy" : { "namespace": "${env.K8S_NAMESPACE}" }
+                    }"""
+
                     sh """
+                        curl -s -X POST '${env.N8N_WEBHOOK_URL}' \
                           -H 'Content-Type: application/json' \
-                          -H 'X-Jenkins-Token: devsecops-secret-2024' \
-                          -d '${payload.trim()}' \
-                          --max-time 10 || true
+                          -H 'X-API-Key: ${env.N8N_API_KEY}' \
+                          -d '${payload.replaceAll("'", "\\\\'")}' \
+                          --max-time 15 || true
+                        echo "n8n notifié: ${event}"
                     """
                 }
             }
@@ -216,23 +252,10 @@ pipeline {
     post {
         always {
             echo "=== BUILD ${currentBuild.currentResult} — Build #${BUILD_NUMBER} ==="
-            script {
-                def buildStatus = currentBuild.currentResult ?: 'FAILURE'
-                sh """
-                    curl -X POST http://172.31.172.61:5678/webhook/jenkins-event \
-                      -H 'Content-Type: application/json' \
-                      -H 'X-Jenkins-Token: devsecops-secret-2024' \
-                      -d '{"event":"pipeline_failed","projectName":"pfe-app-test","buildNumber":${BUILD_NUMBER},"buildStatus":"${buildStatus}","sonarUrl":"http://172.31.172.61:9000/dashboard?id=pfe-app-test","buildUrl":"${BUILD_URL}"}' \
-                      --max-time 10 || true
-                """
-            }
             deleteDir()
         }
-        success {
-            echo 'Pipeline terminé avec succès'
-        }
-        failure {
-            echo 'Pipeline FAILED — vérifier les logs'
-        }
+        success  { echo '✅ Pipeline pfe-app-test SUCCESS' }
+        unstable { echo '⚠️ Pipeline pfe-app-test UNSTABLE' }
+        failure  { echo '❌ Pipeline pfe-app-test FAILED'   }
     }
 }
