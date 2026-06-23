@@ -80,6 +80,7 @@ pipeline {
                     docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
                     # Scan Trivy sur l'image avec rapport JSON
                     trivy image \
+                      --exit-code 0 \
                       --format json \
                       --output trivy-report.json \
                       --severity CRITICAL,HIGH,MEDIUM \

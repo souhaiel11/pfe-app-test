@@ -7,7 +7,7 @@ COPY src ./src
 RUN mvn clean package -DskipTests -B
 
 # Stage 2 — Runtime avec JRE Alpine léger
-FROM openjdk:11-jre-alpine
+FROM eclipse-temurin:11-jre-alpine
 WORKDIR /app
 
 # Métadonnées
