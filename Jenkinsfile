@@ -204,7 +204,6 @@ pipeline {
                     }
                     """
                     sh """
-                        curl -X POST ${BACKEND_WEBHOOK_URL} \
                           -H 'Content-Type: application/json' \
                           -H 'X-Jenkins-Token: devsecops-secret-2024' \
                           -d '${payload.trim()}' \
@@ -223,7 +222,7 @@ pipeline {
                     curl -X POST http://172.31.172.61:5678/webhook/jenkins-event \
                       -H 'Content-Type: application/json' \
                       -H 'X-Jenkins-Token: devsecops-secret-2024' \
-                      -d '{"projectName":"pfe-app-test","buildNumber":${BUILD_NUMBER},"buildStatus":"${buildStatus}","sonarUrl":"http://172.31.172.61:9000/dashboard?id=pfe-app-test","buildUrl":"${BUILD_URL}"}' \
+                      -d '{"event":"pipeline_failed","projectName":"pfe-app-test","buildNumber":${BUILD_NUMBER},"buildStatus":"${buildStatus}","sonarUrl":"http://172.31.172.61:9000/dashboard?id=pfe-app-test","buildUrl":"${BUILD_URL}"}' \
                       --max-time 10 || true
                 """
             }
