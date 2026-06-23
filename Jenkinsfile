@@ -79,6 +79,8 @@ pipeline {
                     # Build image pour scan
                     docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
                     # Scan Trivy sur l'image avec rapport JSON
+                    # Install Trivy if not present
+                    which trivy || (curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin)
                     trivy image \
                       --exit-code 0 \
                       --format json \
@@ -102,7 +104,7 @@ pipeline {
                 echo '=== STAGE 6: OWASP Dependency Check ==='
                 sh """
                     mvn org.owasp:dependency-check-maven:check \
-                      -DnvdApiKey=${NVD_API_KEY} \
+                      -DnvdApiKey=${NVD_API_KEY ?: ""} \
                       -DfailBuildOnCVSS=10 \
                       -Dformat=ALL \
                       -B || true
