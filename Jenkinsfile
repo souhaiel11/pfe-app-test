@@ -5,7 +5,7 @@ pipeline {
         IMAGE_NAME = "pfe-app-test"
         IMAGE_TAG = "${BUILD_NUMBER}"
         SONAR_HOST_URL = 'http://172.31.172.61:9000'
-        BACKEND_WEBHOOK_URL = 'http://172.31.172.61:3001/api/webhooks/jenkins'
+        N8N_WEBHOOK_URL = 'http://172.31.172.61:5678/webhook/jenkins-event'
         K8S_NAMESPACE = 'pfe-devsecops'
         ZAP_TARGET_URL = 'http://192.168.49.2:30003'
     }
