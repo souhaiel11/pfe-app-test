@@ -104,7 +104,6 @@ pipeline {
                 echo '=== STAGE 6: OWASP Dependency Check ==='
                 sh """
                     mvn org.owasp:dependency-check-maven:check \
-                      -DnvdApiKey=${NVD_API_KEY ?: ""} \
                       -DfailBuildOnCVSS=10 \
                       -Dformat=ALL \
                       -B || true
@@ -218,6 +217,16 @@ pipeline {
     post {
         always {
             echo "=== BUILD ${currentBuild.currentResult} — Build #${BUILD_NUMBER} ==="
+            script {
+                def buildStatus = currentBuild.currentResult ?: 'FAILURE'
+                sh """
+                    curl -X POST http://172.31.172.61:5678/webhook/jenkins-event \
+                      -H 'Content-Type: application/json' \
+                      -H 'X-Jenkins-Token: devsecops-secret-2024' \
+                      -d '{"projectName":"pfe-app-test","buildNumber":${BUILD_NUMBER},"buildStatus":"${buildStatus}","sonarUrl":"http://172.31.172.61:9000/dashboard?id=pfe-app-test","buildUrl":"${BUILD_URL}"}' \
+                      --max-time 10 || true
+                """
+            }
             deleteDir()
         }
         success {
