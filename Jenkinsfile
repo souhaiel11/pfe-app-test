@@ -54,7 +54,7 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 echo '=== STAGE 4: SonarQube SAST ==='
-                withSonarQubeEnv('SonarQube') {
+                withSonarQubeEnv('sq1') {
                     sh """
                         mvn sonar:sonar \
                           -Dsonar.projectKey=${APP_NAME} \
