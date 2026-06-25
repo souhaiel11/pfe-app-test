@@ -17,7 +17,6 @@ pipeline {
                 script {
                     // ── Variables spécifiques au projet ───────
                     env.APP_NAME        = 'pfe-app-test'
-                    env.PROJECT_ID      = '54192eca-43da-4d8f-9b49-30c143983fdd'
                     env.BACKEND_URL     = 'http://172.31.172.61:3001'
                     env.N8N_WEBHOOK_URL = 'http://n8n:5678/webhook/jenkins-event'
                     env.SONAR_HOST_URL  = 'http://sonarqube:9000'
@@ -282,13 +281,38 @@ pipeline {
         }
     }
 
-    post {
-        always {
-            echo "=== BUILD ${currentBuild.currentResult} — #${BUILD_NUMBER} ==="
-            deleteDir()
+post {
+    always {
+        echo "=== BUILD ${currentBuild.currentResult} — #${BUILD_NUMBER} ==="
+        script {
+            try {
+                def buildStatus = currentBuild.currentResult ?: 'FAILURE'
+                def event = buildStatus == 'SUCCESS'  ? 'pipeline_success'
+                          : buildStatus == 'UNSTABLE' ? 'pipeline_unstable'
+                          : 'pipeline_failed'
+                def severity = buildStatus == 'FAILURE' ? 'HIGH'
+                             : buildStatus == 'UNSTABLE' ? 'MEDIUM' : 'LOW'
+
+                sh """
+                    curl -s -X POST ${env.N8N_WEBHOOK_URL} \
+                      -H 'Content-Type: application/json' \
+                      -d '{
+                        "event": "${event}",
+                        "job": "${env.JOB_NAME}",
+                        "build_number": "${env.BUILD_NUMBER}",
+                        "build_url": "${env.BUILD_URL}",
+                        "status": "${buildStatus}",
+                        "severity": "${severity}",
+                        "branch": "main"
+                      }' || true
+                """
+            } catch(e) {
+                echo "Webhook failed: ${e.message}"
+            }
         }
-        success  { echo '✅ Pipeline pfe-app-test SUCCESS' }
-        unstable { echo '⚠️ Pipeline pfe-app-test UNSTABLE' }
-        failure  { echo '❌ Pipeline pfe-app-test FAILED'   }
+        deleteDir()
     }
+    success  { echo '✅ Pipeline pfe-app-test SUCCESS' }
+    unstable { echo '⚠️ Pipeline pfe-app-test UNSTABLE' }
+    failure  { echo '❌ Pipeline pfe-app-test FAILED' }
 }
