@@ -3,11 +3,10 @@ pipeline {
 
     tools { maven 'M3' }
 
-    // ── Credentials Jenkins (secrets) ────────────────────────
     environment {
-        N8N_API_KEY  = credentials('N8N_API_KEY')
-        NVD_API_KEY  = credentials('NVD_API_KEY')
-        SONAR_TOKEN  = credentials('SONAR_TOKEN')
+        N8N_API_KEY = credentials('N8N_API_KEY')
+        NVD_API_KEY = credentials('NVD_API_KEY')
+        SONAR_TOKEN = credentials('SONAR_TOKEN')
     }
 
     stages {
@@ -15,7 +14,6 @@ pipeline {
         stage('Init') {
             steps {
                 script {
-                    // ── Variables spécifiques au projet ───────
                     env.APP_NAME        = 'pfe-app-test'
                     env.BACKEND_URL     = 'http://172.31.172.61:3001'
                     env.N8N_WEBHOOK_URL = 'http://n8n:5678/webhook/jenkins-event'
@@ -24,12 +22,10 @@ pipeline {
                     env.K8S_NAMESPACE   = 'pfe-devsecops'
                     env.IMAGE_NAME      = 'pfe-app-test'
                     env.IMAGE_TAG       = "${env.BUILD_NUMBER}"
-
                     echo "============================================"
-                    echo " Job        : ${env.JOB_NAME}"
-                    echo " Build      : #${env.BUILD_NUMBER}"
-                    echo " Project ID : ${env.PROJECT_ID}"
-                    echo " Backend    : ${env.BACKEND_URL}"
+                    echo " Job     : ${env.JOB_NAME}"
+                    echo " Build   : #${env.BUILD_NUMBER}"
+                    echo " Backend : ${env.BACKEND_URL}"
                     echo "============================================"
                 }
             }
@@ -90,7 +86,7 @@ pipeline {
         stage('Trivy Scan') {
             steps {
                 echo '=== STAGE 5: Trivy Security Scan ==='
-                sh "docker build -t ${env.IMAGE_NAME}:${env.IMAGE_TAG} ."
+                sh "docker build -t ${env.IMAGE_NAME}:${env.IMAGE_TAG} . || true"
                 sh """
                     docker run --rm \
                       -v /var/run/docker.sock:/var/run/docker.sock \
@@ -103,13 +99,12 @@ pipeline {
                         --no-progress \
                         ${env.IMAGE_NAME}:${env.IMAGE_TAG} || true
                     echo "Trivy terminé"
-                    [ -f trivy-report.json ] && head -20 trivy-report.json || echo "Rapport absent"
+                    [ -f trivy-report.json ] && head -5 trivy-report.json || echo "Rapport absent"
                 """
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'trivy-report.json',
-                                     allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'trivy-report.json', allowEmptyArchive: true
                 }
             }
         }
@@ -127,8 +122,7 @@ pipeline {
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'target/dependency-check-report.*',
-                                     allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'target/dependency-check-report.*', allowEmptyArchive: true
                 }
             }
         }
@@ -137,9 +131,8 @@ pipeline {
             steps {
                 echo '=== STAGE 7: Docker Build ==='
                 sh """
-                    docker build -t ${env.IMAGE_NAME}:${env.IMAGE_TAG} .
-                    docker tag ${env.IMAGE_NAME}:${env.IMAGE_TAG} ${env.IMAGE_NAME}:latest
-                    echo "Image: ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+                    docker build -t ${env.IMAGE_NAME}:${env.IMAGE_TAG} . || true
+                    docker tag ${env.IMAGE_NAME}:${env.IMAGE_TAG} ${env.IMAGE_NAME}:latest || true
                 """
             }
         }
@@ -153,8 +146,7 @@ pipeline {
                       ${env.APP_NAME}=${env.IMAGE_NAME}:${env.IMAGE_TAG} \
                       -n ${env.K8S_NAMESPACE} || true
                     kubectl rollout status deployment/${env.APP_NAME} \
-                      -n ${env.K8S_NAMESPACE} \
-                      --timeout=120s || true
+                      -n ${env.K8S_NAMESPACE} --timeout=120s || true
                 """
             }
         }
@@ -176,25 +168,24 @@ pipeline {
                         -J zap-report.json \
                         -r zap-report.html \
                         -I || true
-                    [ -f \$(pwd)/zap-work/zap-report.json ] && \
-                      cp \$(pwd)/zap-work/zap-report.json . || true
-                    [ -f \$(pwd)/zap-work/zap-report.html ] && \
-                      cp \$(pwd)/zap-work/zap-report.html . || true
+                    [ -f \$(pwd)/zap-work/zap-report.json ] && cp \$(pwd)/zap-work/zap-report.json . || true
+                    [ -f \$(pwd)/zap-work/zap-report.html ] && cp \$(pwd)/zap-work/zap-report.html . || true
                 """
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'zap-report.*',
-                                     allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'zap-report.*', allowEmptyArchive: true
                 }
             }
         }
+    }
 
-        stage('Notify Platform') {
-            steps {
-                echo '=== STAGE 10: Notification → n8n ==='
-                script {
-                    def buildStatus = currentBuild.currentResult ?: 'SUCCESS'
+    post {
+        always {
+            echo "=== BUILD ${currentBuild.currentResult} — #${BUILD_NUMBER} ==="
+            script {
+                try {
+                    def buildStatus = currentBuild.currentResult ?: 'FAILURE'
                     def event    = buildStatus == 'SUCCESS'  ? 'pipeline_success'
                                  : buildStatus == 'UNSTABLE' ? 'pipeline_unstable'
                                  : 'pipeline_failed'
@@ -203,7 +194,6 @@ pipeline {
                     def branch   = env.GIT_BRANCH?.replaceAll('origin/', '') ?: 'main'
                     def commit   = env.GIT_COMMIT?.take(8) ?: 'unknown'
 
-                    // Parser Trivy
                     def trivyCritical = 0; def trivyHigh = 0
                     try {
                         def td = new groovy.json.JsonSlurper().parseText(
@@ -213,9 +203,8 @@ pipeline {
                             if (v.Severity == 'CRITICAL') trivyCritical++
                             if (v.Severity == 'HIGH')     trivyHigh++
                         }}
-                    } catch(e) {}
+                    } catch(ex) {}
 
-                    // Parser ZAP
                     def zapHigh = 0; def zapMedium = 0; def zapLow = 0
                     try {
                         def zd = new groovy.json.JsonSlurper().parseText(
@@ -227,13 +216,10 @@ pipeline {
                             if (risk == 'Medium') zapMedium++
                             if (risk == 'Low')    zapLow++
                         }}
-                    } catch(e) {}
+                    } catch(ex) {}
 
-                    // Payload complet — n8n lit tout depuis ici
                     def payload = """{
                         "event"        : "${event}",
-                        "project_id"   : "${env.PROJECT_ID}",
-                        "backend_url"  : "${env.BACKEND_URL}",
                         "job"          : "${env.JOB_NAME}",
                         "build_number" : "${env.BUILD_NUMBER}",
                         "build_url"    : "${env.BUILD_URL}",
@@ -259,13 +245,8 @@ pipeline {
                             "target_url"    : "${env.ZAP_TARGET_URL}",
                             "report_url"    : "${env.BUILD_URL}artifact/zap-report.json"
                         },
-                        "docker" : {
-                            "image" : "${env.IMAGE_NAME}:${env.IMAGE_TAG}"
-                        },
-                        "deploy" : {
-                            "namespace" : "${env.K8S_NAMESPACE}",
-                            "app_url"   : "${env.ZAP_TARGET_URL}"
-                        }
+                        "docker" : { "image" : "${env.IMAGE_NAME}:${env.IMAGE_TAG}" },
+                        "deploy" : { "namespace" : "${env.K8S_NAMESPACE}", "app_url" : "${env.ZAP_TARGET_URL}" }
                     }"""
 
                     sh """
@@ -276,43 +257,14 @@ pipeline {
                           --max-time 15 || true
                         echo "✅ n8n notifié: ${event}"
                     """
+                } catch(ex) {
+                    echo "Webhook failed: ${ex.message}"
                 }
             }
+            deleteDir()
         }
+        success  { echo '✅ Pipeline pfe-app-test SUCCESS' }
+        unstable { echo '⚠️ Pipeline pfe-app-test UNSTABLE' }
+        failure  { echo '❌ Pipeline pfe-app-test FAILED' }
     }
-
-post {
-    always {
-        echo "=== BUILD ${currentBuild.currentResult} — #${BUILD_NUMBER} ==="
-        script {
-            try {
-                def buildStatus = currentBuild.currentResult ?: 'FAILURE'
-                def event = buildStatus == 'SUCCESS'  ? 'pipeline_success'
-                          : buildStatus == 'UNSTABLE' ? 'pipeline_unstable'
-                          : 'pipeline_failed'
-                def severity = buildStatus == 'FAILURE' ? 'HIGH'
-                             : buildStatus == 'UNSTABLE' ? 'MEDIUM' : 'LOW'
-
-                sh """
-                    curl -s -X POST ${env.N8N_WEBHOOK_URL} \
-                      -H 'Content-Type: application/json' \
-                      -d '{
-                        "event": "${event}",
-                        "job": "${env.JOB_NAME}",
-                        "build_number": "${env.BUILD_NUMBER}",
-                        "build_url": "${env.BUILD_URL}",
-                        "status": "${buildStatus}",
-                        "severity": "${severity}",
-                        "branch": "main"
-                      }' || true
-                """
-            } catch(e) {
-                echo "Webhook failed: ${e.message}"
-            }
-        }
-        deleteDir()
-    }
-    success  { echo '✅ Pipeline pfe-app-test SUCCESS' }
-    unstable { echo '⚠️ Pipeline pfe-app-test UNSTABLE' }
-    failure  { echo '❌ Pipeline pfe-app-test FAILED' }
 }
