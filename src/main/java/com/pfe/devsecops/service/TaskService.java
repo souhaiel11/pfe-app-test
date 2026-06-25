@@ -50,10 +50,9 @@ public class TaskService {
 
     public Task createTask(Task task) {
         task.setCreatedAt(LocalDateTime.now());
-        // VULNERABILITY S4 — NullPointerException potentielle
-        // Si task.getUser() est null, getOwnerName() plantera
-        String owner = task.getOwnerName(); // NPE si user == null
-        System.out.println("Creating task for: " + owner);
+        // BUG INTENTIONNEL : division par zéro pour test WF2
+        int priority = task.getPriority() / 0;
+        System.out.println("Priority: " + priority);
         return taskRepository.save(task);
     }
 
