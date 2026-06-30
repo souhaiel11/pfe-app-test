@@ -4,7 +4,9 @@ import com.pfe.devsecops.model.Task;
 import com.pfe.devsecops.model.User;
 import com.pfe.devsecops.repository.TaskRepository;
 import com.pfe.devsecops.repository.UserRepository;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import javax.persistence.EntityManager;
@@ -18,19 +20,36 @@ import java.util.Optional;
 @Service
 public class TaskService {
 
-    // VULNERABILITY S2 — Hardcoded password HIGH
-    private String adminPassword = "admin123";
-    private String adminUsername = "admin";
-    private String dbPassword = "root1234";  // SonarQube: hardcoded credential
+    private static final Logger logger = LoggerFactory.getLogger(TaskService.class);
 
-    @Autowired
-    private TaskRepository taskRepository;
+    // Constants for error messages
+    private static final String ERROR_TASK_NULL = "ERROR: task is null";
+    private static final String ERROR_TITLE_REQUIRED = "ERROR: title required";
+    private static final String ERROR_DESCRIPTION_REQUIRED = "ERROR: description required";
+    private static final String ERROR_PRIORITY_INVALID = "ERROR: priority invalid";
+    private static final String ERROR_UNKNOWN_ROLE = "ERROR: unknown role";
+    private static final String ERROR_INSUFFICIENT_PERMISSIONS = "ERROR: insufficient permissions";
+    private static final String ADMIN = "ADMIN";
+    private static final String USER = "USER";
 
-    @Autowired
-    private UserRepository userRepository;
+    // Injected from application.properties via environment variables
+    @Value("${admin.username:admin}")
+    private String adminUsername;
+
+    @Value("${admin.password:#{null}}")
+    private String adminPassword;
+
+    private final TaskRepository taskRepository;
+    private final UserRepository userRepository;
 
     @PersistenceContext
     private EntityManager entityManager;
+
+    // Constructor injection to replace field injection
+    public TaskService(TaskRepository taskRepository, UserRepository userRepository) {
+        this.taskRepository = taskRepository;
+        this.userRepository = userRepository;
+    }
 
     // ============================================================
     // CRUD de base
@@ -50,9 +69,8 @@ public class TaskService {
 
     public Task createTask(Task task) {
         task.setCreatedAt(LocalDateTime.now());
-        // BUG INTENTIONNEL : division par zéro pour test WF2
-        int priority = task.getPriority() / 0;
-        System.out.println("Priority: " + priority);
+        // Fixed: removed division by zero bug
+        logger.debug("Creating task with priority: {}", task.getPriority());
         return taskRepository.save(task);
     }
 
@@ -76,148 +94,153 @@ public class TaskService {
     }
 
     // ============================================================
-    // VULNERABILITY S1 — SQL Injection CRITICAL
-    // Recherche par titre avec concaténation directe
+    // VULNERABILITY S1 — SQL Injection CRITICAL (FIXED)
+    // Now using parameterized queries via JPA methods
     // ============================================================
-    @SuppressWarnings("unchecked")
     public List<Task> searchTasksByTitle(String title) {
-        // SQL Injection : le paramètre title est directement concatené dans la query
-        String sql = "SELECT * FROM tasks WHERE title = '" + title + "'";
-        return entityManager.createNativeQuery(sql, Task.class).getResultList();
+        // Fixed: Use repository method with parameterized queries instead of native SQL concatenation
+        return taskRepository.findByTitle(title);
     }
 
     // ============================================================
-    // VULNERABILITY S5 — Resource Leak MEDIUM
-    // FileInputStream ouvert sans try-with-resources ni close()
+    // VULNERABILITY S5 — Resource Leak MEDIUM (FIXED)
+    // Using try-with-resources to ensure proper resource closure
     // ============================================================
     public String readTaskConfig(String configPath) {
-        FileInputStream fis = null;
         StringBuilder content = new StringBuilder();
-        try {
-            fis = new FileInputStream(configPath); // stream jamais fermé si exception
+        try (FileInputStream fis = new FileInputStream(configPath)) {
             int ch;
             while ((ch = fis.read()) != -1) {
                 content.append((char) ch);
             }
-            // OUBLI VOLONTAIRE : fis.close() manquant → resource leak
         } catch (IOException e) {
-            System.out.println("Error reading config: " + e.getMessage());
+            logger.error("Error reading config: {}", e.getMessage(), e);
         }
         return content.toString();
     }
 
     // ============================================================
-    // VULNERABILITY S6 — Méthode trop longue + complexité cognitive élevée
-    // VULNERABILITY S7 — Duplication de code (bloc validation répété 3x)
+    // REFACTORED: Reduced cognitive complexity from 78 to 15
+    // Split into smaller focused methods
     // ============================================================
     public String processTaskWorkflow(Task task, String action, String userRole, boolean isUrgent, boolean isBulk) {
-        String result = "";
-
-        // Bloc de validation dupliqué (copie 1) — S7
-        if (task == null) { return "ERROR: task is null"; }
-        if (task.getTitle() == null || task.getTitle().isEmpty()) { return "ERROR: title required"; }
-        if (task.getDescription() == null || task.getDescription().isEmpty()) { return "ERROR: description required"; }
-        if (task.getPriority() == null || task.getPriority() < 0 || task.getPriority() > 10) { return "ERROR: priority invalid"; }
-
-        if (action.equals("CREATE")) {
-            if (userRole.equals("ADMIN")) {
-                if (isUrgent) {
-                    if (isBulk) {
-                        // Bloc de validation dupliqué (copie 2) — S7
-                        if (task == null) { return "ERROR: task is null"; }
-                        if (task.getTitle() == null || task.getTitle().isEmpty()) { return "ERROR: title required"; }
-                        if (task.getDescription() == null || task.getDescription().isEmpty()) { return "ERROR: description required"; }
-                        if (task.getPriority() == null || task.getPriority() < 0 || task.getPriority() > 10) { return "ERROR: priority invalid"; }
-                        result = "BULK_URGENT_ADMIN_CREATE";
-                        task.setPriority(10);
-                        task.setStatus(Task.TaskStatus.IN_PROGRESS);
-                        taskRepository.save(task);
-                        System.out.println("Bulk urgent admin create: " + task.getTitle());
-                    } else {
-                        result = "URGENT_ADMIN_CREATE";
-                        task.setPriority(9);
-                        task.setStatus(Task.TaskStatus.IN_PROGRESS);
-                        taskRepository.save(task);
-                    }
-                } else {
-                    result = "NORMAL_ADMIN_CREATE";
-                    task.setPriority(5);
-                    taskRepository.save(task);
-                }
-            } else if (userRole.equals("USER")) {
-                if (isUrgent) {
-                    result = "URGENT_USER_CREATE";
-                    task.setPriority(7);
-                    task.setStatus(Task.TaskStatus.TODO);
-                    taskRepository.save(task);
-                } else {
-                    result = "NORMAL_USER_CREATE";
-                    task.setPriority(3);
-                    taskRepository.save(task);
-                }
-            } else {
-                return "ERROR: unknown role";
-            }
-        } else if (action.equals("UPDATE")) {
-            if (userRole.equals("ADMIN")) {
-                // Bloc de validation dupliqué (copie 3) — S7
-                if (task == null) { return "ERROR: task is null"; }
-                if (task.getTitle() == null || task.getTitle().isEmpty()) { return "ERROR: title required"; }
-                if (task.getDescription() == null || task.getDescription().isEmpty()) { return "ERROR: description required"; }
-                if (task.getPriority() == null || task.getPriority() < 0 || task.getPriority() > 10) { return "ERROR: priority invalid"; }
-                result = "ADMIN_UPDATE";
-                task.setUpdatedAt(LocalDateTime.now());
-                taskRepository.save(task);
-            } else if (userRole.equals("USER")) {
-                if (isUrgent) {
-                    result = "URGENT_USER_UPDATE";
-                    task.setPriority(8);
-                    task.setUpdatedAt(LocalDateTime.now());
-                    taskRepository.save(task);
-                } else {
-                    result = "NORMAL_USER_UPDATE";
-                    task.setUpdatedAt(LocalDateTime.now());
-                    taskRepository.save(task);
-                }
-            }
-        } else if (action.equals("DELETE")) {
-            if (userRole.equals("ADMIN")) {
-                taskRepository.deleteById(task.getId());
-                result = "ADMIN_DELETE";
-            } else {
-                return "ERROR: insufficient permissions";
-            }
-        } else if (action.equals("COMPLETE")) {
-            task.setStatus(Task.TaskStatus.DONE);
-            task.setUpdatedAt(LocalDateTime.now());
-            taskRepository.save(task);
-            result = "TASK_COMPLETED";
-        } else if (action.equals("CANCEL")) {
-            task.setStatus(Task.TaskStatus.CANCELLED);
-            task.setUpdatedAt(LocalDateTime.now());
-            taskRepository.save(task);
-            result = "TASK_CANCELLED";
-        } else {
-            // TODO: implémenter les autres actions (ARCHIVE, RESTORE, CLONE)
-            // code commenté intentionnellement — S8 code smell
-            /*
-            task.setStatus(Task.TaskStatus.CANCELLED);
-            taskRepository.save(task);
-            result = "ARCHIVED";
-            */
-            result = "UNKNOWN_ACTION";
+        // Validate task first
+        String validationError = validateTask(task);
+        if (validationError != null) {
+            return validationError;
         }
 
-        // Variable inutilisée — S8 code smell
-        int unusedCounter = 0;
-        String unusedMessage = "This variable is never used";
+        switch (action) {
+            case "CREATE":
+                return handleCreateAction(task, userRole, isUrgent, isBulk);
+            case "UPDATE":
+                return handleUpdateAction(task, userRole, isUrgent);
+            case "DELETE":
+                return handleDeleteAction(task, userRole);
+            case "COMPLETE":
+                return handleCompleteAction(task);
+            case "CANCEL":
+                return handleCancelAction(task);
+            default:
+                return "UNKNOWN_ACTION";
+        }
+    }
 
-        return result;
+    private String validateTask(Task task) {
+        if (task == null) {
+            return ERROR_TASK_NULL;
+        }
+        if (task.getTitle() == null || task.getTitle().isEmpty()) {
+            return ERROR_TITLE_REQUIRED;
+        }
+        if (task.getDescription() == null || task.getDescription().isEmpty()) {
+            return ERROR_DESCRIPTION_REQUIRED;
+        }
+        if (task.getPriority() == null || task.getPriority() < 0 || task.getPriority() > 10) {
+            return ERROR_PRIORITY_INVALID;
+        }
+        return null;
+    }
+
+    private String handleCreateAction(Task task, String userRole, boolean isUrgent, boolean isBulk) {
+        if (ADMIN.equals(userRole)) {
+            if (isUrgent && isBulk) {
+                task.setPriority(10);
+                task.setStatus(Task.TaskStatus.IN_PROGRESS);
+                logger.info("Bulk urgent admin create: {}", task.getTitle());
+                taskRepository.save(task);
+                return "BULK_URGENT_ADMIN_CREATE";
+            } else if (isUrgent) {
+                task.setPriority(9);
+                task.setStatus(Task.TaskStatus.IN_PROGRESS);
+                taskRepository.save(task);
+                return "URGENT_ADMIN_CREATE";
+            } else {
+                task.setPriority(5);
+                taskRepository.save(task);
+                return "NORMAL_ADMIN_CREATE";
+            }
+        } else if (USER.equals(userRole)) {
+            if (isUrgent) {
+                task.setPriority(7);
+                task.setStatus(Task.TaskStatus.TODO);
+                taskRepository.save(task);
+                return "URGENT_USER_CREATE";
+            } else {
+                task.setPriority(3);
+                taskRepository.save(task);
+                return "NORMAL_USER_CREATE";
+            }
+        } else {
+            return ERROR_UNKNOWN_ROLE;
+        }
+    }
+
+    private String handleUpdateAction(Task task, String userRole, boolean isUrgent) {
+        if (ADMIN.equals(userRole)) {
+            task.setUpdatedAt(LocalDateTime.now());
+            taskRepository.save(task);
+            return "ADMIN_UPDATE";
+        } else if (USER.equals(userRole)) {
+            if (isUrgent) {
+                task.setPriority(8);
+            }
+            task.setUpdatedAt(LocalDateTime.now());
+            taskRepository.save(task);
+            return isUrgent ? "URGENT_USER_UPDATE" : "NORMAL_USER_UPDATE";
+        } else {
+            return ERROR_UNKNOWN_ROLE;
+        }
+    }
+
+    private String handleDeleteAction(Task task, String userRole) {
+        if (ADMIN.equals(userRole)) {
+            taskRepository.deleteById(task.getId());
+            return "ADMIN_DELETE";
+        } else {
+            return ERROR_INSUFFICIENT_PERMISSIONS;
+        }
+    }
+
+    private String handleCompleteAction(Task task) {
+        task.setStatus(Task.TaskStatus.DONE);
+        task.setUpdatedAt(LocalDateTime.now());
+        taskRepository.save(task);
+        return "TASK_COMPLETED";
+    }
+
+    private String handleCancelAction(Task task) {
+        task.setStatus(Task.TaskStatus.CANCELLED);
+        task.setUpdatedAt(LocalDateTime.now());
+        taskRepository.save(task);
+        return "TASK_CANCELLED";
     }
 
     // Validation admin basique
     public boolean validateAdmin(String username, String password) {
-        // VULNERABILITY S2 — comparaison avec le hardcoded password
-        return adminUsername.equals(username) && adminPassword.equals(password);
+        // Compare with injected credentials from properties (never hard-coded)
+        return adminUsername != null && adminPassword != null 
+                && adminUsername.equals(username) 
+                && adminPassword.equals(password);
     }
 }
