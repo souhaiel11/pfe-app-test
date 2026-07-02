@@ -91,15 +91,12 @@ public class TaskService {
     // FileInputStream ouvert sans try-with-resources ni close()
     // ============================================================
     public String readTaskConfig(String configPath) {
-        FileInputStream fis = null;
         StringBuilder content = new StringBuilder();
-        try {
-            fis = new FileInputStream(configPath); // stream jamais fermé si exception
+        try (FileInputStream fis = new FileInputStream(configPath)) {
             int ch;
             while ((ch = fis.read()) != -1) {
                 content.append((char) ch);
             }
-            // OUBLI VOLONTAIRE : fis.close() manquant → resource leak
         } catch (IOException e) {
             System.out.println("Error reading config: " + e.getMessage());
         }
