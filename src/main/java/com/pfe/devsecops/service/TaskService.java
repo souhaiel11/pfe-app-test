@@ -252,8 +252,10 @@ public class TaskService {
     }
 
     // Validation admin basique
+    // TODO: Refactor to use DTO pattern to prevent entity exposure in REST endpoints
     public boolean validateAdmin(String username, String password) {
         // Fixed: Use environment-based credentials instead of hardcoded values
+        // Credentials are injected via @Value from application.properties or environment variables
         return adminUsername != null && adminUsername.equals(username) &&
                adminPassword != null && adminPassword.equals(password);
     }
