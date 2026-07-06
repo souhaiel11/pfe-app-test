@@ -218,6 +218,18 @@ pipeline {
                         }}
                     } catch(ex) {}
 
+                    def owaspCritical = 0; def owaspHigh = 0
+                    try {
+                        def od = new groovy.json.JsonSlurper().parseText(
+                            readFile("${env.WORKSPACE}/target/dependency-check-report.json")
+                        )
+                        od.dependencies?.each { dep -> dep.vulnerabilities?.each { v ->
+                            def sev = v.severity?.toUpperCase()
+                            if (sev == 'CRITICAL') owaspCritical++
+                            if (sev == 'HIGH')     owaspHigh++
+                        }}
+                    } catch(ex) {}
+
                     def payload = """{
                         "event"        : "${event}",
                         "job"          : "${env.JOB_NAME}",
@@ -245,6 +257,11 @@ pipeline {
                             "target_url"    : "${env.ZAP_TARGET_URL}",
                             "report_url"    : "${env.BUILD_URL}artifact/zap-report.json"
                         },
+                        "owasp" : {
+                            "critical"   : ${owaspCritical},
+                            "high"       : ${owaspHigh},
+                            "report_url" : "${env.BUILD_URL}artifact/target/dependency-check-report.json"
+                        },
                         "docker" : { "image" : "${env.IMAGE_NAME}:${env.IMAGE_TAG}" },
                         "deploy" : { "namespace" : "${env.K8S_NAMESPACE}", "app_url" : "${env.ZAP_TARGET_URL}" }
                     }"""
@@ -268,3 +285,4 @@ pipeline {
         failure  { echo '❌ Pipeline pfe-app-test FAILED' }
     }
 }
+
