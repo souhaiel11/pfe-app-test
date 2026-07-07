@@ -90,16 +90,15 @@ pipeline {
                 sh """
                     docker run --rm \
                       -v /var/run/docker.sock:/var/run/docker.sock \
-                      -v \$(pwd):/workspace \
                       aquasec/trivy:latest image \
                         --exit-code 0 \
                         --format json \
-                        --output /workspace/trivy-report.json \
                         --severity CRITICAL,HIGH,MEDIUM \
                         --no-progress \
-                        ${env.IMAGE_NAME}:${env.IMAGE_TAG} || true
-                    echo "Trivy terminé"
-                    [ -f trivy-report.json ] && head -5 trivy-report.json || echo "Rapport absent"
+                        ${env.IMAGE_NAME}:${env.IMAGE_TAG} > trivy-report.json 2>/dev/null || true
+                    echo "Trivy termine"
+                    ls -la trivy-report.json 2>/dev/null || echo "Rapport absent"
+                    [ -f trivy-report.json ] && head -5 trivy-report.json || true
                 """
             }
             post {
@@ -122,6 +121,7 @@ pipeline {
             }
             post {
                 always {
+                    sh 'ls -la target/dependency-check-report.* 2>/dev/null || echo "OWASP reports absent"'
                     archiveArtifacts artifacts: 'target/dependency-check-report.*', allowEmptyArchive: true
                 }
             }
@@ -156,20 +156,22 @@ pipeline {
                 echo '=== STAGE 9: OWASP ZAP DAST ==='
                 sh """
                     sleep 15
-                    mkdir -p \$(pwd)/zap-work
-                    chmod 777 \$(pwd)/zap-work
-                    docker run --rm \
+                    ZAP_CID=\$(docker run -d \
                       --network=host \
-                      -v \$(pwd)/zap-work:/zap/wrk/:rw \
                       --user root \
                       ghcr.io/zaproxy/zaproxy:stable \
                       zap-baseline.py \
                         -t ${env.ZAP_TARGET_URL} \
                         -J zap-report.json \
                         -r zap-report.html \
-                        -I || true
-                    [ -f \$(pwd)/zap-work/zap-report.json ] && cp \$(pwd)/zap-work/zap-report.json . || true
-                    [ -f \$(pwd)/zap-work/zap-report.html ] && cp \$(pwd)/zap-work/zap-report.html . || true
+                        -I)
+                    docker wait \$ZAP_CID || true
+                    docker cp \$ZAP_CID:/zap/wrk/zap-report.json . 2>/dev/null || true
+                    docker cp \$ZAP_CID:/zap/wrk/zap-report.html . 2>/dev/null || true
+                    docker rm \$ZAP_CID 2>/dev/null || true
+                    echo "ZAP termine"
+                    ls -la zap-report.json 2>/dev/null || echo "Rapport ZAP absent"
+                    [ -f zap-report.json ] && head -5 zap-report.json || true
                 """
             }
             post {
@@ -303,5 +305,6 @@ pipeline {
         failure  { echo '❌ Pipeline pfe-app-test FAILED' }
     }
 }
+
 
 
