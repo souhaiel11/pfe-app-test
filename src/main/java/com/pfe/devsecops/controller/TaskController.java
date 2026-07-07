@@ -3,12 +3,15 @@ package com.pfe.devsecops.controller;
 import com.pfe.devsecops.model.Task;
 import com.pfe.devsecops.dto.TaskRequestDTO;
 import com.pfe.devsecops.dto.TaskResponseDTO;
+import com.pfe.devsecops.dto.TaskDTO;
 import com.pfe.devsecops.service.TaskService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 
@@ -16,8 +19,12 @@ import java.util.List;
 @RequestMapping("/api/tasks")
 public class TaskController {
 
-    @Autowired
-    private TaskService taskService;
+    private static final Logger logger = LoggerFactory.getLogger(TaskController.class);
+    private final TaskService taskService;
+
+    public TaskController(TaskService taskService) {
+        this.taskService = taskService;
+    }
 
     @GetMapping
     public ResponseEntity<List<Task>> getAllTasks() {
@@ -37,21 +44,21 @@ public class TaskController {
     }
 
     @PostMapping
-    public ResponseEntity<TaskResponseDTO> createTask(@RequestBody TaskRequestDTO dto) {
+    public ResponseEntity<TaskResponseDTO> createTask(@RequestBody TaskDTO taskDTO) {
         Task task = new Task();
-        task.setTitle(dto.getTitle());
-        task.setDescription(dto.getDescription());
-        task.setStatus(dto.getStatus());
+        task.setTitle(taskDTO.getTitle());
+        task.setDescription(taskDTO.getDescription());
+        task.setStatus(taskDTO.getStatus());
         Task createdTask = taskService.createTask(task);
         return ResponseEntity.ok(convertToResponseDTO(createdTask));
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<TaskResponseDTO> updateTask(@PathVariable Long id, @RequestBody TaskRequestDTO dto) {
+    public ResponseEntity<TaskResponseDTO> updateTask(@PathVariable Long id, @RequestBody TaskDTO taskDTO) {
         Task task = new Task();
-        task.setTitle(dto.getTitle());
-        task.setDescription(dto.getDescription());
-        task.setStatus(dto.getStatus());
+        task.setTitle(taskDTO.getTitle());
+        task.setDescription(taskDTO.getDescription());
+        task.setStatus(taskDTO.getStatus());
         Task updatedTask = taskService.updateTask(id, task);
         return ResponseEntity.ok(convertToResponseDTO(updatedTask));
     }
