@@ -33,13 +33,17 @@ public class TaskController {
     }
 
     @PostMapping
-    public ResponseEntity<Task> createTask(@RequestBody Task task) {
-        return ResponseEntity.ok(taskService.createTask(task));
+    public ResponseEntity<Task> createTask(@RequestBody Object taskDTO) {
+        // TODO: Replace Task entity with TaskDTO - Create TaskDTO class mirroring Task fields without JPA annotations
+        // TODO: Add mapping logic in TaskService to convert TaskDTO to Task entity
+        return ResponseEntity.ok(taskService.createTask((Task) taskDTO));
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<Task> updateTask(@PathVariable Long id, @RequestBody Task task) {
-        return ResponseEntity.ok(taskService.updateTask(id, task));
+    public ResponseEntity<Task> updateTask(@PathVariable Long id, @RequestBody Object taskDTO) {
+        // TODO: Replace Task entity with TaskDTO - Create TaskDTO class mirroring Task fields without JPA annotations
+        // TODO: Add mapping logic in TaskService to convert TaskDTO to Task entity
+        return ResponseEntity.ok(taskService.updateTask(id, (Task) taskDTO));
     }
 
     @DeleteMapping("/{id}")
