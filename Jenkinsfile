@@ -115,8 +115,12 @@ pipeline {
                     mvn org.owasp:dependency-check-maven:check \
                       -DfailBuildOnCVSS=10 \
                       -DnvdApiKey=${env.NVD_API_KEY} \
+                      -DnvdApiDelay=6000 \
+                      -DfailOnError=false \
                       -Dformat=ALL \
+                      -DdataDirectory=/tmp/dc-data \
                       -B || true
+                    ls -la target/dependency-check-report.* 2>/dev/null || echo "OWASP: no report generated"
                 """
             }
             post {
@@ -166,7 +170,10 @@ pipeline {
                         -r zap-report.html \
                         -I)
                     docker wait \$ZAP_CID || true
-                    docker cp \$ZAP_CID:/zap/wrk/zap-report.json . 2>/dev/null || true
+                    docker cp \$ZAP_CID:/zap/zap-report.json . 2>/dev/null || \
+                    docker cp \$ZAP_CID:/zap/wrk/zap-report.json . 2>/dev/null || \
+                    docker cp \$ZAP_CID:/home/zap/zap-report.json . 2>/dev/null || true
+                    docker cp \$ZAP_CID:/zap/zap-report.html . 2>/dev/null || \
                     docker cp \$ZAP_CID:/zap/wrk/zap-report.html . 2>/dev/null || true
                     docker rm \$ZAP_CID 2>/dev/null || true
                     echo "ZAP termine"
