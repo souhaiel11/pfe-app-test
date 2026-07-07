@@ -194,40 +194,55 @@ pipeline {
                     def branch   = env.GIT_BRANCH?.replaceAll('origin/', '') ?: 'main'
                     def commit   = env.GIT_COMMIT?.take(8) ?: 'unknown'
 
-                    def trivyCritical = 0; def trivyHigh = 0
+                    def trivyCritical = 0; def trivyHigh = 0; def trivyCves = '[]'
                     try {
                         def td = new groovy.json.JsonSlurper().parseText(
                             readFile("${env.WORKSPACE}/trivy-report.json")
                         )
+                        def cveList = []
                         td.Results?.each { r -> r.Vulnerabilities?.each { v ->
                             if (v.Severity == 'CRITICAL') trivyCritical++
                             if (v.Severity == 'HIGH')     trivyHigh++
+                            if (cveList.size() < 10 && (v.Severity == 'CRITICAL' || v.Severity == 'HIGH')) {
+                                cveList << [id: v.VulnerabilityID, severity: v.Severity, pkg: v.PkgName, title: (v.Title ?: '').take(80)]
+                            }
                         }}
+                        trivyCves = groovy.json.JsonOutput.toJson(cveList)
                     } catch(ex) {}
 
-                    def zapHigh = 0; def zapMedium = 0; def zapLow = 0
+                    def zapHigh = 0; def zapMedium = 0; def zapLow = 0; def zapAlerts = '[]'
                     try {
                         def zd = new groovy.json.JsonSlurper().parseText(
                             readFile("${env.WORKSPACE}/zap-report.json")
                         )
+                        def alertList = []
                         zd.site?.each { s -> s.alerts?.each { a ->
                             def risk = a.riskdesc?.split(' ')[0]
                             if (risk == 'High')   zapHigh++
                             if (risk == 'Medium') zapMedium++
                             if (risk == 'Low')    zapLow++
+                            if (alertList.size() < 5 && (risk == 'High' || risk == 'Medium')) {
+                                alertList << [name: (a.name ?: '').take(60), risk: risk, desc: (a.desc ?: '').take(80), solution: (a.solution ?: '').take(80)]
+                            }
                         }}
+                        zapAlerts = groovy.json.JsonOutput.toJson(alertList)
                     } catch(ex) {}
 
-                    def owaspCritical = 0; def owaspHigh = 0
+                    def owaspCritical = 0; def owaspHigh = 0; def owaspCves = '[]'
                     try {
                         def od = new groovy.json.JsonSlurper().parseText(
                             readFile("${env.WORKSPACE}/target/dependency-check-report.json")
                         )
+                        def owaspList = []
                         od.dependencies?.each { dep -> dep.vulnerabilities?.each { v ->
                             def sev = v.severity?.toUpperCase()
                             if (sev == 'CRITICAL') owaspCritical++
                             if (sev == 'HIGH')     owaspHigh++
+                            if (owaspList.size() < 5 && (sev == 'CRITICAL' || sev == 'HIGH')) {
+                                owaspList << [id: v.name, severity: sev, pkg: dep.fileName, desc: (v.description ?: '').take(80)]
+                            }
                         }}
+                        owaspCves = groovy.json.JsonOutput.toJson(owaspList)
                     } catch(ex) {}
 
                     def payload = """{
@@ -248,18 +263,21 @@ pipeline {
                         "trivy" : {
                             "critical"   : ${trivyCritical},
                             "high"       : ${trivyHigh},
+                            "cves"       : ${trivyCves},
                             "report_url" : "${env.BUILD_URL}artifact/trivy-report.json"
                         },
                         "zap" : {
                             "alerts_high"   : ${zapHigh},
                             "alerts_medium" : ${zapMedium},
                             "alerts_low"    : ${zapLow},
+                            "alerts"        : ${zapAlerts},
                             "target_url"    : "${env.ZAP_TARGET_URL}",
                             "report_url"    : "${env.BUILD_URL}artifact/zap-report.json"
                         },
                         "owasp" : {
                             "critical"   : ${owaspCritical},
                             "high"       : ${owaspHigh},
+                            "cves"       : ${owaspCves},
                             "report_url" : "${env.BUILD_URL}artifact/target/dependency-check-report.json"
                         },
                         "docker" : { "image" : "${env.IMAGE_NAME}:${env.IMAGE_TAG}" },
@@ -285,4 +303,5 @@ pipeline {
         failure  { echo '❌ Pipeline pfe-app-test FAILED' }
     }
 }
+
 
