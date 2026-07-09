@@ -114,86 +114,75 @@ pipeline {
             }
         }
 
-        stage('Trivy Scan') {
-            steps {
-                echo '=== STAGE 5: Trivy Security Scan ==='
+stage('Trivy Scan') {
+    steps {
+        echo '=== STAGE 5: Trivy Security Scan ==='
 
-                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    sh '''
-                        BUILD="$BUILD_NUMBER"
-                        TMP_DIR="/tmp/trivy-test-$BUILD"
+        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+            sh '''
+                BUILD="$BUILD_NUMBER"
+                TMP_DIR="/tmp/trivy-test-$BUILD"
 
-                        rm -rf "$TMP_DIR"
-                        mkdir -p "$TMP_DIR"
+                rm -rf "$TMP_DIR"
+                mkdir -p "$TMP_DIR"
 
-                        echo "=== Create persistent Trivy cache ==="
-                        docker volume create trivy-cache || true
+                echo "=== Create persistent Trivy cache ==="
+                docker volume create trivy-cache || true
 
-                        echo "=== Save Docker image ==="
-                        docker save "$IMAGE_NAME:$IMAGE_TAG" -o "$TMP_DIR/image.tar"
-                        ls -lh "$TMP_DIR/image.tar"
+                echo "=== Save Docker image ==="
+                docker save "$IMAGE_NAME:$IMAGE_TAG" -o "$TMP_DIR/image.tar"
+                ls -lh "$TMP_DIR/image.tar"
 
-                        echo "=== Try to update Trivy DB in cache ==="
-                        docker run --rm \
-                          -v trivy-cache:/root/.cache \
-                          aquasec/trivy:latest image \
-                            --download-db-only || true
+                echo "=== Try to update Trivy DB cache ==="
+                docker run --rm \
+                  -v trivy-cache:/root/.cache \
+                  aquasec/trivy:latest image \
+                  --download-db-only || true
 
-                        echo "=== Create Trivy container with cache ==="
-                        TRIVY_CID=$(docker create \
-                          -v trivy-cache:/root/.cache \
-                          --entrypoint sh \
-                          aquasec/trivy:latest \
-                          -c "sleep 1200")
+                echo "=== Create Trivy container with cache ==="
+                TRIVY_CID=$(docker create \
+                  -v trivy-cache:/root/.cache \
+                  --entrypoint sh \
+                  aquasec/trivy:latest \
+                  -c "sleep 1800")
 
-                        docker start "$TRIVY_CID" >/dev/null
+                docker start "$TRIVY_CID" >/dev/null
 
-                        echo "=== Copy image.tar to Trivy container ==="
-                        docker cp "$TMP_DIR/image.tar" "$TRIVY_CID:/image.tar"
+                echo "=== Copy image.tar to Trivy container ==="
+                docker cp "$TMP_DIR/image.tar" "$TRIVY_CID:/image.tar"
 
-                        echo "=== Run Trivy scan ==="
-                        docker exec "$TRIVY_CID" trivy image \
-                          --input /image.tar \
-                          --scanners vuln \
-                          --exit-code 0 \
-                          --format json \
-                          --severity CRITICAL,HIGH,MEDIUM \
-                          --no-progress \
-                          --timeout 15m \
-                          --output /trivy-report.json || true
+                echo "=== Run Trivy scan ==="
+                docker exec "$TRIVY_CID" trivy image \
+                  --input /image.tar \
+                  --scanners vuln \
+                  --skip-db-update \
+                  --skip-java-db-update \
+                  --exit-code 0 \
+                  --format json \
+                  --severity CRITICAL,HIGH,MEDIUM \
+                  --no-progress \
+                  --timeout 30m \
+                  --output /trivy-report.json || true
 
-                        echo "=== Try offline scan if previous failed ==="
-                        if ! docker cp "$TRIVY_CID:/trivy-report.json" "$TMP_DIR/trivy-report.json" 2>/dev/null; then
-                          docker exec "$TRIVY_CID" trivy image \
-                            --input /image.tar \
-                            --scanners vuln \
-                            --skip-db-update \
-                            --exit-code 0 \
-                            --format json \
-                            --severity CRITICAL,HIGH,MEDIUM \
-                            --no-progress \
-                            --timeout 10m \
-                            --output /trivy-report.json || true
+                echo "=== Copy Trivy report ==="
+                docker cp "$TRIVY_CID:/trivy-report.json" "$TMP_DIR/trivy-report.json" || true
+                docker rm -f "$TRIVY_CID" >/dev/null 2>&1 || true
 
-                          docker cp "$TRIVY_CID:/trivy-report.json" "$TMP_DIR/trivy-report.json" 2>/dev/null || true
-                        fi
+                if [ ! -s "$TMP_DIR/trivy-report.json" ]; then
+                  echo '{"SchemaVersion":2,"Results":[],"status":"trivy_report_missing"}' > "$TMP_DIR/trivy-report.json"
+                fi
 
-                        docker rm -f "$TRIVY_CID" >/dev/null 2>&1 || true
+                mkdir -p "$REPORT_BASE"
+                cp "$TMP_DIR/trivy-report.json" "$REPORT_BASE/trivy-report.json"
 
-                        if [ ! -s "$TMP_DIR/trivy-report.json" ]; then
-                          echo '{"SchemaVersion":2,"Results":[],"status":"trivy_report_missing"}' > "$TMP_DIR/trivy-report.json"
-                        fi
-
-                        cp "$TMP_DIR/trivy-report.json" "$REPORT_BASE/trivy-report.json"
-
-                        echo "=== Final Trivy report ==="
-                        ls -lh "$REPORT_BASE/trivy-report.json"
-                        head -c 500 "$REPORT_BASE/trivy-report.json" || true
-                        echo ""
-                    '''
-                }
-            }
+                echo "=== Final Trivy report ==="
+                ls -lh "$REPORT_BASE/trivy-report.json"
+                head -c 500 "$REPORT_BASE/trivy-report.json" || true
+                echo ""
+            '''
         }
+    }
+}
 
         stage('OWASP Dependency Check') {
             steps {
