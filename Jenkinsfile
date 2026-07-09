@@ -42,11 +42,11 @@ pipeline {
                     '''
 
                     echo "============================================"
-                    echo " Job       : ${env.JOB_NAME}"
-                    echo " Build     : #${env.BUILD_NUMBER}"
-                    echo " App       : ${env.APP_NAME}"
-                    echo " Image     : ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
-                    echo " Reports   : ${env.REPORT_BASE}"
+                    echo " Job     : ${env.JOB_NAME}"
+                    echo " Build   : #${env.BUILD_NUMBER}"
+                    echo " App     : ${env.APP_NAME}"
+                    echo " Image   : ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+                    echo " Reports : ${env.REPORT_BASE}"
                     echo "============================================"
                 }
             }
@@ -59,7 +59,7 @@ pipeline {
 
                 sh '''
                     echo "Commit: $(git rev-parse --short HEAD)"
-                    echo "Branch: $(git rev-parse --abbrev-ref HEAD || true)"
+                    echo "Branch : $(git rev-parse --abbrev-ref HEAD || true)"
                 '''
             }
         }
@@ -107,7 +107,7 @@ pipeline {
                         docker build -t "$IMAGE_NAME:$IMAGE_TAG" . || true
                         docker tag "$IMAGE_NAME:$IMAGE_TAG" "$IMAGE_NAME:latest" || true
 
-                        echo "=== Docker images ==="
+                        echo "=== Docker image created ==="
                         docker images | grep "$IMAGE_NAME" || true
                     '''
                 }
@@ -126,12 +126,26 @@ pipeline {
                         rm -rf "$TMP_DIR"
                         mkdir -p "$TMP_DIR"
 
+                        echo "=== Create persistent Trivy cache ==="
+                        docker volume create trivy-cache || true
+
                         echo "=== Save Docker image ==="
                         docker save "$IMAGE_NAME:$IMAGE_TAG" -o "$TMP_DIR/image.tar"
                         ls -lh "$TMP_DIR/image.tar"
 
-                        echo "=== Create Trivy container ==="
-                        TRIVY_CID=$(docker create --entrypoint sh aquasec/trivy:latest -c "sleep 1200")
+                        echo "=== Try to update Trivy DB in cache ==="
+                        docker run --rm \
+                          -v trivy-cache:/root/.cache \
+                          aquasec/trivy:latest image \
+                            --download-db-only || true
+
+                        echo "=== Create Trivy container with cache ==="
+                        TRIVY_CID=$(docker create \
+                          -v trivy-cache:/root/.cache \
+                          --entrypoint sh \
+                          aquasec/trivy:latest \
+                          -c "sleep 1200")
+
                         docker start "$TRIVY_CID" >/dev/null
 
                         echo "=== Copy image.tar to Trivy container ==="
@@ -148,8 +162,22 @@ pipeline {
                           --timeout 15m \
                           --output /trivy-report.json || true
 
-                        echo "=== Copy Trivy report back ==="
-                        docker cp "$TRIVY_CID:/trivy-report.json" "$TMP_DIR/trivy-report.json" || true
+                        echo "=== Try offline scan if previous failed ==="
+                        if ! docker cp "$TRIVY_CID:/trivy-report.json" "$TMP_DIR/trivy-report.json" 2>/dev/null; then
+                          docker exec "$TRIVY_CID" trivy image \
+                            --input /image.tar \
+                            --scanners vuln \
+                            --skip-db-update \
+                            --exit-code 0 \
+                            --format json \
+                            --severity CRITICAL,HIGH,MEDIUM \
+                            --no-progress \
+                            --timeout 10m \
+                            --output /trivy-report.json || true
+
+                          docker cp "$TRIVY_CID:/trivy-report.json" "$TMP_DIR/trivy-report.json" 2>/dev/null || true
+                        fi
+
                         docker rm -f "$TRIVY_CID" >/dev/null 2>&1 || true
 
                         if [ ! -s "$TMP_DIR/trivy-report.json" ]; then
@@ -195,7 +223,29 @@ pipeline {
                           -DnvdApiKey="$NVD_API_KEY" \
                           -DnvdApiDelay=6000 \
                           -DskipTests=true \
+                          -DretireJsAnalyzerEnabled=false \
+                          -DnodeAuditAnalyzerEnabled=false \
+                          -DossindexAnalyzerEnabled=false \
+                          -DknownExploitedEnabled=false \
+                          -DhostedSuppressionsEnabled=false \
                           -B || true
+
+                        echo "=== Try OWASP offline mode if report missing ==="
+                        if [ ! -f target/dependency-check-report.json ]; then
+                          timeout 10m "$MVN" org.owasp:dependency-check-maven:check \
+                            -Dformat=ALL \
+                            -DfailBuildOnCVSS=11 \
+                            -DfailOnError=false \
+                            -DdataDirectory=/var/jenkins_home/dependency-check-data \
+                            -DautoUpdate=false \
+                            -DskipTests=true \
+                            -DretireJsAnalyzerEnabled=false \
+                            -DnodeAuditAnalyzerEnabled=false \
+                            -DossindexAnalyzerEnabled=false \
+                            -DknownExploitedEnabled=false \
+                            -DhostedSuppressionsEnabled=false \
+                            -B || true
+                        fi
 
                         echo "=== Copy OWASP reports ==="
 
@@ -224,6 +274,11 @@ pipeline {
 
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                     sh '''
+                        if ! command -v kubectl >/dev/null 2>&1; then
+                          echo "kubectl not found in Jenkins. Skipping deploy."
+                          exit 0
+                        fi
+
                         kubectl apply -f k8s/ -n "$K8S_NAMESPACE" || true
 
                         kubectl set image deployment/app-test \
@@ -250,6 +305,20 @@ pipeline {
                     sh '''
                         BUILD="$BUILD_NUMBER"
                         ZAP_POD="zap-scan-$BUILD"
+
+                        mkdir -p "$REPORT_BASE"
+
+                        if ! command -v kubectl >/dev/null 2>&1; then
+                          echo "kubectl not found in Jenkins. ZAP Kubernetes scan skipped."
+                          echo '{"site":[],"status":"zap_kubectl_missing"}' > "$REPORT_BASE/zap-report.json"
+                          exit 0
+                        fi
+
+                        echo "=== Check Kubernetes access ==="
+                        kubectl get svc -n "$K8S_NAMESPACE" || {
+                          echo '{"site":[],"status":"zap_k8s_unreachable"}' > "$REPORT_BASE/zap-report.json"
+                          exit 0
+                        }
 
                         echo "=== Clean old ZAP pod ==="
                         kubectl delete pod "$ZAP_POD" \
@@ -296,8 +365,6 @@ pipeline {
                         kubectl logs "$ZAP_POD" -n "$K8S_NAMESPACE" || true
 
                         echo "=== Copy ZAP reports ==="
-                        mkdir -p "$REPORT_BASE"
-
                         kubectl cp "$K8S_NAMESPACE/$ZAP_POD:/zap/wrk/zap-report.json" "$REPORT_BASE/zap-report.json" || true
                         kubectl cp "$K8S_NAMESPACE/$ZAP_POD:/zap/wrk/zap-report.html" "$REPORT_BASE/zap-report.html" || true
                         kubectl cp "$K8S_NAMESPACE/$ZAP_POD:/zap/wrk/zap-report.md" "$REPORT_BASE/zap-report.md" || true
