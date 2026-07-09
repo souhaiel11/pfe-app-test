@@ -5,6 +5,11 @@ pipeline {
         maven 'M3'
     }
 
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
     environment {
         N8N_API_KEY = credentials('N8N_API_KEY')
         NVD_API_KEY = credentials('NVD_API_KEY')
@@ -16,25 +21,32 @@ pipeline {
         stage('Init') {
             steps {
                 script {
-                    env.APP_NAME        = 'pfe-app-test'
-                    env.BACKEND_URL     = 'http://172.31.172.61:3001'
-                    env.N8N_WEBHOOK_URL = 'http://n8n:5678/webhook/jenkins-event'
-                    env.SONAR_HOST_URL  = 'http://sonarqube:9000'
-                    env.ZAP_TARGET_URL  = 'http://192.168.49.2:30003'
-                    env.K8S_NAMESPACE   = 'pfe-devsecops'
-                    env.IMAGE_NAME      = 'pfe-app-test'
-                    env.IMAGE_TAG       = "${env.BUILD_NUMBER}"
-                    env.REPORT_BASE     = "/shared/reports/${env.APP_NAME}/${env.BUILD_NUMBER}"
+                    env.APP_NAME = 'pfe-app-test'
+                    env.IMAGE_NAME = 'pfe-app-test'
+                    env.IMAGE_TAG = "${env.BUILD_NUMBER}"
 
-                    sh """
-                        mkdir -p '${env.REPORT_BASE}'
-                        echo "Report base: ${env.REPORT_BASE}"
-                    """
+                    env.BACKEND_URL = 'http://172.31.172.61:3001'
+                    env.N8N_WEBHOOK_URL = 'http://n8n:5678/webhook/jenkins-event'
+                    env.SONAR_HOST_URL = 'http://sonarqube:9000'
+
+                    env.K8S_NAMESPACE = 'pfe-devsecops'
+                    env.ZAP_IMAGE = 'zaproxy/zap-stable:latest'
+                    env.ZAP_TARGET_URL = 'http://app-test:8080'
+
+                    env.REPORT_BASE = "/shared/reports/${env.APP_NAME}/${env.BUILD_NUMBER}"
+                    env.N8N_REPORT_BASE = "/home/node/.n8n-files/reports/${env.APP_NAME}/${env.BUILD_NUMBER}"
+
+                    sh '''
+                        mkdir -p "$REPORT_BASE"
+                        echo "Report base Jenkins: $REPORT_BASE"
+                        echo "Report base n8n    : $N8N_REPORT_BASE"
+                    '''
 
                     echo "============================================"
                     echo " Job       : ${env.JOB_NAME}"
                     echo " Build     : #${env.BUILD_NUMBER}"
-                    echo " Commit    : ${env.GIT_COMMIT ?: 'unknown'}"
+                    echo " App       : ${env.APP_NAME}"
+                    echo " Image     : ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
                     echo " Reports   : ${env.REPORT_BASE}"
                     echo "============================================"
                 }
@@ -45,22 +57,24 @@ pipeline {
             steps {
                 echo '=== STAGE 1: Checkout ==='
                 checkout scm
-                sh """
-                    echo "Commit: \$(git rev-parse --short HEAD)"
-                    echo "Branch: \$(git rev-parse --abbrev-ref HEAD || true)"
-                """
+
+                sh '''
+                    echo "Commit: $(git rev-parse --short HEAD)"
+                    echo "Branch: $(git rev-parse --abbrev-ref HEAD || true)"
+                '''
             }
         }
 
         stage('Build Without Tests') {
             steps {
                 echo '=== STAGE 2: Maven Build Without Tests ==='
+
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    sh """
+                    sh '''
                         mvn clean package -B \
                           -DskipTests=true \
                           -Djacoco.skip=true || true
-                    """
+                    '''
                 }
             }
         }
@@ -68,17 +82,18 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 echo '=== STAGE 3: SonarQube SAST ==='
+
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                     withSonarQubeEnv('sq1') {
-                        sh """
+                        sh '''
                             mvn sonar:sonar -B \
                               -DskipTests=true \
                               -Djacoco.skip=true \
-                              -Dsonar.projectKey=${env.APP_NAME} \
-                              -Dsonar.projectName='PFE App Test' \
-                              -Dsonar.host.url=${env.SONAR_HOST_URL} \
-                              -Dsonar.token=${env.SONAR_TOKEN} || true
-                        """
+                              -Dsonar.projectKey="$APP_NAME" \
+                              -Dsonar.projectName="PFE App Test" \
+                              -Dsonar.host.url="$SONAR_HOST_URL" \
+                              -Dsonar.token="$SONAR_TOKEN" || true
+                        '''
                     }
                 }
             }
@@ -87,11 +102,15 @@ pipeline {
         stage('Docker Build') {
             steps {
                 echo '=== STAGE 4: Docker Build ==='
+
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    sh """
-                        docker build -t ${env.IMAGE_NAME}:${env.IMAGE_TAG} . || true
-                        docker tag ${env.IMAGE_NAME}:${env.IMAGE_TAG} ${env.IMAGE_NAME}:latest || true
-                    """
+                    sh '''
+                        docker build -t "$IMAGE_NAME:$IMAGE_TAG" . || true
+                        docker tag "$IMAGE_NAME:$IMAGE_TAG" "$IMAGE_NAME:latest" || true
+
+                        echo "=== Docker images ==="
+                        docker images | grep "$IMAGE_NAME" || true
+                    '''
                 }
             }
         }
@@ -99,26 +118,52 @@ pipeline {
         stage('Trivy Scan') {
             steps {
                 echo '=== STAGE 5: Trivy Security Scan ==='
-                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    sh """
-                        docker run --rm \
-                          -v /var/run/docker.sock:/var/run/docker.sock \
-                          aquasec/trivy:latest image \
-                            --exit-code 0 \
-                            --format json \
-                            --severity CRITICAL,HIGH,MEDIUM \
-                            --no-progress \
-                            ${env.IMAGE_NAME}:${env.IMAGE_TAG} > trivy-report.json 2>/dev/null || true
 
-                        if [ ! -s trivy-report.json ]; then
-                          echo '{"SchemaVersion":2,"Results":[],"status":"trivy_report_missing"}' > trivy-report.json
+                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                    sh '''
+                        BUILD="$BUILD_NUMBER"
+                        TMP_DIR="/tmp/trivy-test-$BUILD"
+
+                        rm -rf "$TMP_DIR"
+                        mkdir -p "$TMP_DIR"
+
+                        echo "=== Save Docker image ==="
+                        docker save "$IMAGE_NAME:$IMAGE_TAG" -o "$TMP_DIR/image.tar"
+                        ls -lh "$TMP_DIR/image.tar"
+
+                        echo "=== Create Trivy container ==="
+                        TRIVY_CID=$(docker create --entrypoint sh aquasec/trivy:latest -c "sleep 1200")
+                        docker start "$TRIVY_CID" >/dev/null
+
+                        echo "=== Copy image.tar to Trivy container ==="
+                        docker cp "$TMP_DIR/image.tar" "$TRIVY_CID:/image.tar"
+
+                        echo "=== Run Trivy scan ==="
+                        docker exec "$TRIVY_CID" trivy image \
+                          --input /image.tar \
+                          --scanners vuln \
+                          --exit-code 0 \
+                          --format json \
+                          --severity CRITICAL,HIGH,MEDIUM \
+                          --no-progress \
+                          --timeout 15m \
+                          --output /trivy-report.json || true
+
+                        echo "=== Copy Trivy report back ==="
+                        docker cp "$TRIVY_CID:/trivy-report.json" "$TMP_DIR/trivy-report.json" || true
+                        docker rm -f "$TRIVY_CID" >/dev/null 2>&1 || true
+
+                        if [ ! -s "$TMP_DIR/trivy-report.json" ]; then
+                          echo '{"SchemaVersion":2,"Results":[],"status":"trivy_report_missing"}' > "$TMP_DIR/trivy-report.json"
                         fi
 
-                        cp trivy-report.json '${env.REPORT_BASE}/trivy-report.json' || true
+                        cp "$TMP_DIR/trivy-report.json" "$REPORT_BASE/trivy-report.json"
 
-                        echo "=== Trivy copied ==="
-                        ls -la '${env.REPORT_BASE}/trivy-report.json' || true
-                    """
+                        echo "=== Final Trivy report ==="
+                        ls -lh "$REPORT_BASE/trivy-report.json"
+                        head -c 500 "$REPORT_BASE/trivy-report.json" || true
+                        echo ""
+                    '''
                 }
             }
         }
@@ -126,31 +171,50 @@ pipeline {
         stage('OWASP Dependency Check') {
             steps {
                 echo '=== STAGE 6: OWASP Dependency Check ==='
+
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    sh """
-                        timeout 20m mvn org.owasp:dependency-check-maven:check \
-                          -DfailBuildOnCVSS=10 \
-                          -DnvdApiKey=${env.NVD_API_KEY} \
-                          -DnvdApiDelay=6000 \
-                          -DfailOnError=false \
+                    sh '''
+                        MVN="/var/jenkins_home/tools/hudson.tasks.Maven_MavenInstallation/M3/bin/mvn"
+
+                        if [ ! -x "$MVN" ]; then
+                          MVN=$(find /var/jenkins_home/tools -type f -name mvn | head -1)
+                        fi
+
+                        echo "=== Maven check ==="
+                        "$MVN" -v
+
+                        echo "=== Prepare OWASP folders ==="
+                        mkdir -p "$REPORT_BASE"
+                        mkdir -p /var/jenkins_home/dependency-check-data
+
+                        echo "=== Run OWASP Dependency Check ==="
+                        timeout 30m "$MVN" org.owasp:dependency-check-maven:check \
                           -Dformat=ALL \
-                          -DdataDirectory=/tmp/dc-data \
+                          -DfailBuildOnCVSS=11 \
+                          -DfailOnError=false \
+                          -DdataDirectory=/var/jenkins_home/dependency-check-data \
+                          -DnvdApiKey="$NVD_API_KEY" \
+                          -DnvdApiDelay=6000 \
                           -DskipTests=true \
                           -B || true
 
+                        echo "=== Copy OWASP reports ==="
+
                         if [ -f target/dependency-check-report.json ]; then
-                          cp target/dependency-check-report.json '${env.REPORT_BASE}/dependency-check-report.json' || true
+                          cp target/dependency-check-report.json "$REPORT_BASE/dependency-check-report.json"
                         else
-                          echo '{"dependencies":[],"status":"owasp_report_missing"}' > '${env.REPORT_BASE}/dependency-check-report.json'
+                          echo '{"dependencies":[],"status":"owasp_report_missing"}' > "$REPORT_BASE/dependency-check-report.json"
                         fi
 
                         if [ -f target/dependency-check-report.html ]; then
-                          cp target/dependency-check-report.html '${env.REPORT_BASE}/dependency-check-report.html' || true
+                          cp target/dependency-check-report.html "$REPORT_BASE/dependency-check-report.html"
                         fi
 
-                        echo "=== OWASP copied ==="
-                        ls -la '${env.REPORT_BASE}/dependency-check-report.json' || true
-                    """
+                        echo "=== Final OWASP reports ==="
+                        ls -lh "$REPORT_BASE"/dependency-check-report.* || true
+                        head -c 500 "$REPORT_BASE/dependency-check-report.json" || true
+                        echo ""
+                    '''
                 }
             }
         }
@@ -158,74 +222,101 @@ pipeline {
         stage('Deploy to Minikube') {
             steps {
                 echo '=== STAGE 7: Deploy Kubernetes ==='
+
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    sh """
-                        kubectl apply -f k8s/ -n ${env.K8S_NAMESPACE} || true
+                    sh '''
+                        kubectl apply -f k8s/ -n "$K8S_NAMESPACE" || true
 
-                        kubectl set image deployment/${env.APP_NAME} \
-                          ${env.APP_NAME}=${env.IMAGE_NAME}:${env.IMAGE_TAG} \
-                          -n ${env.K8S_NAMESPACE} || true
+                        kubectl set image deployment/app-test \
+                          app-test="$IMAGE_NAME:$IMAGE_TAG" \
+                          -n "$K8S_NAMESPACE" || true
 
-                        kubectl rollout status deployment/${env.APP_NAME} \
-                          -n ${env.K8S_NAMESPACE} --timeout=120s || true
-                    """
+                        kubectl rollout status deployment/app-test \
+                          -n "$K8S_NAMESPACE" \
+                          --timeout=120s || true
+                    '''
                 }
             }
         }
 
         stage('ZAP DAST Scan') {
             options {
-                timeout(time: 15, unit: 'MINUTES')
+                timeout(time: 20, unit: 'MINUTES')
             }
 
             steps {
-                echo '=== STAGE 8: OWASP ZAP DAST ==='
+                echo '=== STAGE 8: OWASP ZAP DAST Scan inside Kubernetes ==='
+
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    sh """
-                        sleep 10
+                    sh '''
+                        BUILD="$BUILD_NUMBER"
+                        ZAP_POD="zap-scan-$BUILD"
 
-                        echo "Testing ZAP target..."
-                        curl -I --max-time 10 ${env.ZAP_TARGET_URL} || true
+                        echo "=== Clean old ZAP pod ==="
+                        kubectl delete pod "$ZAP_POD" \
+                          -n "$K8S_NAMESPACE" \
+                          --ignore-not-found=true || true
 
-                        ZAP_CID=\$(docker run -d \
-                          --network=host \
-                          --user root \
-                          ghcr.io/zaproxy/zaproxy:stable \
-                          zap-baseline.py \
-                            -t ${env.ZAP_TARGET_URL} \
-                            -J zap-report.json \
-                            -r zap-report.html \
-                            -I || true)
+                        echo "=== Run ZAP pod inside Kubernetes ==="
+                        kubectl run "$ZAP_POD" \
+                          -n "$K8S_NAMESPACE" \
+                          --image="$ZAP_IMAGE" \
+                          --image-pull-policy=IfNotPresent \
+                          --restart=Never \
+                          --command -- sh -lc '
+                            mkdir -p /zap/wrk
 
-                        echo "ZAP container: \$ZAP_CID"
+                            zap-baseline.py \
+                              -t http://app-test:8080 \
+                              -J zap-report.json \
+                              -r zap-report.html \
+                              -w zap-report.md \
+                              -I || true
 
-                        if [ -n "\$ZAP_CID" ]; then
-                          timeout 12m docker wait \$ZAP_CID || true
+                            touch /zap/wrk/zap.done
+                            sleep 3600
+                          '
 
-                          docker cp \$ZAP_CID:/zap/zap-report.json . 2>/dev/null || \
-                          docker cp \$ZAP_CID:/zap/wrk/zap-report.json . 2>/dev/null || \
-                          docker cp \$ZAP_CID:/home/zap/zap-report.json . 2>/dev/null || true
+                        echo "=== Wait for ZAP pod ready ==="
+                        kubectl wait --for=condition=Ready pod/"$ZAP_POD" \
+                          -n "$K8S_NAMESPACE" \
+                          --timeout=180s || true
 
-                          docker cp \$ZAP_CID:/zap/zap-report.html . 2>/dev/null || \
-                          docker cp \$ZAP_CID:/zap/wrk/zap-report.html . 2>/dev/null || \
-                          docker cp \$ZAP_CID:/home/zap/zap-report.html . 2>/dev/null || true
+                        echo "=== Wait for ZAP scan completion ==="
+                        for i in $(seq 1 90); do
+                          if kubectl exec "$ZAP_POD" -n "$K8S_NAMESPACE" -- test -f /zap/wrk/zap.done 2>/dev/null; then
+                            echo "ZAP scan finished"
+                            break
+                          fi
 
-                          docker rm -f \$ZAP_CID 2>/dev/null || true
+                          echo "Waiting ZAP scan... $i"
+                          sleep 10
+                        done
+
+                        echo "=== ZAP logs ==="
+                        kubectl logs "$ZAP_POD" -n "$K8S_NAMESPACE" || true
+
+                        echo "=== Copy ZAP reports ==="
+                        mkdir -p "$REPORT_BASE"
+
+                        kubectl cp "$K8S_NAMESPACE/$ZAP_POD:/zap/wrk/zap-report.json" "$REPORT_BASE/zap-report.json" || true
+                        kubectl cp "$K8S_NAMESPACE/$ZAP_POD:/zap/wrk/zap-report.html" "$REPORT_BASE/zap-report.html" || true
+                        kubectl cp "$K8S_NAMESPACE/$ZAP_POD:/zap/wrk/zap-report.md" "$REPORT_BASE/zap-report.md" || true
+
+                        if [ ! -s "$REPORT_BASE/zap-report.json" ]; then
+                          echo '{"site":[],"status":"zap_report_missing"}' > "$REPORT_BASE/zap-report.json"
                         fi
 
-                        if [ ! -s zap-report.json ]; then
-                          echo '{"site":[],"status":"zap_report_missing"}' > zap-report.json
-                        fi
+                        echo "=== Final ZAP reports ==="
+                        ls -lh "$REPORT_BASE"/zap-report.* || true
+                        head -c 500 "$REPORT_BASE/zap-report.json" || true
+                        echo ""
 
-                        cp zap-report.json '${env.REPORT_BASE}/zap-report.json' || true
-
-                        if [ -f zap-report.html ]; then
-                          cp zap-report.html '${env.REPORT_BASE}/zap-report.html' || true
-                        fi
-
-                        echo "=== ZAP copied ==="
-                        ls -la '${env.REPORT_BASE}/zap-report.json' || true
-                    """
+                        echo "=== Cleanup ZAP pod ==="
+                        kubectl delete pod "$ZAP_POD" \
+                          -n "$K8S_NAMESPACE" \
+                          --ignore-not-found=true || true
+                    '''
                 }
             }
         }
@@ -233,7 +324,7 @@ pipeline {
 
     post {
         always {
-            echo "=== FINAL REPORTING ==="
+            echo '=== FINAL REPORTING ==='
 
             script {
                 try {
@@ -250,99 +341,20 @@ pipeline {
                     def branch = env.GIT_BRANCH?.replaceAll('origin/', '') ?: 'main'
                     def commit = env.GIT_COMMIT?.take(8) ?: 'unknown'
 
-                    def trivyPath = "${env.REPORT_BASE}/trivy-report.json"
-                    def zapPath   = "${env.REPORT_BASE}/zap-report.json"
-                    def owaspPath = "${env.REPORT_BASE}/dependency-check-report.json"
+                    def trivyAvailable = sh(
+                        script: "test -s '${env.REPORT_BASE}/trivy-report.json'",
+                        returnStatus: true
+                    ) == 0
 
-                    def trivyCritical = 0
-                    def trivyHigh = 0
-                    def trivyCves = []
+                    def zapAvailable = sh(
+                        script: "test -s '${env.REPORT_BASE}/zap-report.json'",
+                        returnStatus: true
+                    ) == 0
 
-                    try {
-                        if (fileExists('trivy-report.json')) {
-                            def td = new groovy.json.JsonSlurper().parseText(readFile('trivy-report.json'))
-
-                            td.Results?.each { r ->
-                                r.Vulnerabilities?.each { v ->
-                                    if (v.Severity == 'CRITICAL') trivyCritical++
-                                    if (v.Severity == 'HIGH') trivyHigh++
-
-                                    if (trivyCves.size() < 10 && (v.Severity == 'CRITICAL' || v.Severity == 'HIGH')) {
-                                        trivyCves << [
-                                            id      : v.VulnerabilityID,
-                                            severity: v.Severity,
-                                            pkg     : v.PkgName,
-                                            title   : (v.Title ?: '').take(80)
-                                        ]
-                                    }
-                                }
-                            }
-                        }
-                    } catch (ex) {
-                        echo "Trivy parse failed: ${ex.message}"
-                    }
-
-                    def zapHigh = 0
-                    def zapMedium = 0
-                    def zapLow = 0
-                    def zapAlerts = []
-
-                    try {
-                        if (fileExists('zap-report.json')) {
-                            def zd = new groovy.json.JsonSlurper().parseText(readFile('zap-report.json'))
-
-                            zd.site?.each { s ->
-                                s.alerts?.each { a ->
-                                    def risk = a.riskdesc?.split(' ')[0]
-
-                                    if (risk == 'High') zapHigh++
-                                    if (risk == 'Medium') zapMedium++
-                                    if (risk == 'Low') zapLow++
-
-                                    if (zapAlerts.size() < 5 && (risk == 'High' || risk == 'Medium')) {
-                                        zapAlerts << [
-                                            name    : (a.name ?: '').take(60),
-                                            risk    : risk,
-                                            desc    : (a.desc ?: '').take(80),
-                                            solution: (a.solution ?: '').take(80)
-                                        ]
-                                    }
-                                }
-                            }
-                        }
-                    } catch (ex) {
-                        echo "ZAP parse failed: ${ex.message}"
-                    }
-
-                    def owaspCritical = 0
-                    def owaspHigh = 0
-                    def owaspCves = []
-
-                    try {
-                        if (fileExists('target/dependency-check-report.json')) {
-                            def od = new groovy.json.JsonSlurper().parseText(readFile('target/dependency-check-report.json'))
-
-                            od.dependencies?.each { dep ->
-                                dep.vulnerabilities?.each { v ->
-                                    def sev = v.severity?.toUpperCase()
-
-                                    if (sev == 'CRITICAL') owaspCritical++
-                                    if (sev == 'HIGH') owaspHigh++
-
-                                    if (owaspCves.size() < 5 && (sev == 'CRITICAL' || sev == 'HIGH')) {
-                                        owaspCves << [
-                                            id      : v.name,
-                                            severity: sev,
-                                            pkg     : dep.fileName,
-                                            desc    : (v.description ?: '').take(80)
-                                        ]
-                                    }
-                                }
-                            }
-                        }
-                    } catch (ex) {
-                        echo "OWASP parse failed: ${ex.message}"
-                    }
+                    def owaspAvailable = sh(
+                        script: "test -s '${env.REPORT_BASE}/dependency-check-report.json'",
+                        returnStatus: true
+                    ) == 0
 
                     def payloadObject = [
                         event       : event,
@@ -357,10 +369,18 @@ pipeline {
                         duration_ms : currentBuild.duration,
 
                         reports: [
-                            basePath : env.REPORT_BASE,
-                            trivyPath: trivyPath,
-                            zapPath  : zapPath,
-                            owaspPath: owaspPath
+                            jenkinsBasePath: env.REPORT_BASE,
+                            basePath       : env.N8N_REPORT_BASE,
+
+                            trivyPath: "${env.N8N_REPORT_BASE}/trivy-report.json",
+                            zapPath  : "${env.N8N_REPORT_BASE}/zap-report.json",
+                            owaspPath: "${env.N8N_REPORT_BASE}/dependency-check-report.json",
+
+                            available: [
+                                trivy: trivyAvailable,
+                                zap  : zapAvailable,
+                                owasp: owaspAvailable
+                            ]
                         ],
 
                         sonar: [
@@ -369,26 +389,16 @@ pipeline {
                         ],
 
                         trivy: [
-                            critical   : trivyCritical,
-                            high       : trivyHigh,
-                            cves       : trivyCves,
-                            report_path: trivyPath
+                            report_path: "${env.N8N_REPORT_BASE}/trivy-report.json"
                         ],
 
                         zap: [
-                            alerts_high  : zapHigh,
-                            alerts_medium: zapMedium,
-                            alerts_low   : zapLow,
-                            alerts       : zapAlerts,
-                            target_url   : env.ZAP_TARGET_URL,
-                            report_path  : zapPath
+                            target_url : env.ZAP_TARGET_URL,
+                            report_path: "${env.N8N_REPORT_BASE}/zap-report.json"
                         ],
 
                         owasp: [
-                            critical   : owaspCritical,
-                            high       : owaspHigh,
-                            cves       : owaspCves,
-                            report_path: owaspPath
+                            report_path: "${env.N8N_REPORT_BASE}/dependency-check-report.json"
                         ],
 
                         docker: [
@@ -407,20 +417,20 @@ pipeline {
 
                     writeFile file: 'jenkins-webhook-payload.json', text: payload
 
-                    sh """
-                        cp jenkins-webhook-payload.json '${env.REPORT_BASE}/payload.json' || true
+                    sh '''
+                        cp jenkins-webhook-payload.json "$REPORT_BASE/payload.json" || true
 
                         echo "=== Shared reports final ==="
-                        ls -la '${env.REPORT_BASE}' || true
+                        ls -la "$REPORT_BASE" || true
 
-                        curl -s -X POST '${env.N8N_WEBHOOK_URL}' \
-                          -H 'Content-Type: application/json' \
-                          -H 'X-API-Key: ${env.N8N_API_KEY}' \
+                        curl -s -X POST "$N8N_WEBHOOK_URL" \
+                          -H "Content-Type: application/json" \
+                          -H "X-API-Key: $N8N_API_KEY" \
                           --data-binary @jenkins-webhook-payload.json \
                           --max-time 15 || true
 
-                        echo "✅ n8n notified: ${event}"
-                    """
+                        echo "n8n notified"
+                    '''
 
                 } catch (ex) {
                     echo "Final reporting failed: ${ex.message}"
@@ -428,6 +438,18 @@ pipeline {
             }
 
             deleteDir()
+        }
+
+        success {
+            echo 'Pipeline SUCCESS'
+        }
+
+        unstable {
+            echo 'Pipeline UNSTABLE'
+        }
+
+        failure {
+            echo 'Pipeline FAILED'
         }
     }
 }
