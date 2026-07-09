@@ -195,7 +195,7 @@ pipeline {
 
         stage('OWASP Dependency Check') {
     options {
-        timeout(time: 45, unit: 'MINUTES')
+        timeout(time: 75, unit: 'MINUTES')
     }
 
     steps {
@@ -220,34 +220,39 @@ pipeline {
                 echo "=== OWASP Dependency-Check version ==="
                 echo "$ODC_VERSION"
 
-                echo "=== Step 1: Update OWASP NVD cache ==="
-                timeout 35m "$MVN" org.owasp:dependency-check-maven:$ODC_VERSION:update-only \
-                  -DdataDirectory="$ODC_DATA" \
-                  -DnvdApiKey="$NVD_API_KEY" \
-                  -DnvdApiDelay=6000 \
-                  -DnvdMaxRetryCount=20 \
-                  -DnvdValidForHours=168 \
-                  -DretireJsAnalyzerEnabled=false \
-                  -DnodeAuditAnalyzerEnabled=false \
-                  -DossindexAnalyzerEnabled=false \
-                  -DknownExploitedEnabled=false \
-                  -DhostedSuppressionsEnabled=false \
-                  -B || true
+                echo "=== Step 1: Update OWASP NVD cache WITHOUT API key ==="
+                {
+                  timeout 60m "$MVN" org.owasp:dependency-check-maven:$ODC_VERSION:update-only \
+                    -DdataDirectory="$ODC_DATA" \
+                    -DnvdApiDelay=10000 \
+                    -DnvdMaxRetryCount=30 \
+                    -DnvdValidForHours=168 \
+                    -DretireJsAnalyzerEnabled=false \
+                    -DnodeAuditAnalyzerEnabled=false \
+                    -DossindexAnalyzerEnabled=false \
+                    -DknownExploitedEnabled=false \
+                    -DhostedSuppressionsEnabled=false \
+                    -B || true
 
-                echo "=== Step 2: Run OWASP scan using local cache ==="
-                timeout 20m "$MVN" org.owasp:dependency-check-maven:$ODC_VERSION:check \
-                  -Dformat=ALL \
-                  -DfailBuildOnCVSS=11 \
-                  -DfailOnError=false \
-                  -DdataDirectory="$ODC_DATA" \
-                  -DautoUpdate=false \
-                  -DskipTests=true \
-                  -DretireJsAnalyzerEnabled=false \
-                  -DnodeAuditAnalyzerEnabled=false \
-                  -DossindexAnalyzerEnabled=false \
-                  -DknownExploitedEnabled=false \
-                  -DhostedSuppressionsEnabled=false \
-                  -B || true
+                  echo "=== Step 2: Run OWASP scan using local cache ==="
+
+                  timeout 20m "$MVN" org.owasp:dependency-check-maven:$ODC_VERSION:check \
+                    -Dformat=ALL \
+                    -DfailBuildOnCVSS=11 \
+                    -DfailOnError=false \
+                    -DdataDirectory="$ODC_DATA" \
+                    -DautoUpdate=false \
+                    -DskipTests=true \
+                    -DretireJsAnalyzerEnabled=false \
+                    -DnodeAuditAnalyzerEnabled=false \
+                    -DossindexAnalyzerEnabled=false \
+                    -DknownExploitedEnabled=false \
+                    -DhostedSuppressionsEnabled=false \
+                    -B || true
+                } > "$REPORT_BASE/owasp.log" 2>&1
+
+                echo "=== OWASP log tail ==="
+                tail -120 "$REPORT_BASE/owasp.log" || true
 
                 echo "=== Copy OWASP reports ==="
 
@@ -266,14 +271,13 @@ pipeline {
                 fi
 
                 echo "=== Final OWASP reports ==="
-                ls -lh "$REPORT_BASE"/dependency-check-report.* || true
+                ls -lh "$REPORT_BASE"/dependency-check-report.* "$REPORT_BASE/owasp.log" || true
                 head -c 500 "$REPORT_BASE/dependency-check-report.json" || true
                 echo ""
             '''
         }
     }
 }
-
         stage('Kubernetes Target Check') {
             steps {
                 echo '=== STAGE 7: Kubernetes Target Check ==='
