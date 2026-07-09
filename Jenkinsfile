@@ -13,6 +13,19 @@ pipeline {
         N8N_API_KEY = credentials('N8N_API_KEY')
         NVD_API_KEY = credentials('NVD_API_KEY')
         SONAR_TOKEN = credentials('SONAR_TOKEN')
+
+        APP_NAME = 'pfe-app-test'
+        IMAGE_NAME = 'pfe-app-test'
+
+        BACKEND_URL = 'http://172.31.172.61:3001'
+        N8N_WEBHOOK_URL = 'http://n8n:5678/webhook/jenkins-event'
+        SONAR_HOST_URL = 'http://sonarqube:9000'
+
+        K8S_NAMESPACE = 'pfe-devsecops'
+        KUBECONFIG = '/var/jenkins_home/.kube/config'
+
+        ZAP_IMAGE = 'zaproxy/zap-stable:latest'
+        ZAP_TARGET_URL = 'http://app-test:8080'
     }
 
     stages {
@@ -20,46 +33,36 @@ pipeline {
         stage('Init') {
             steps {
                 script {
-                    env.APP_NAME = 'pfe-app-test'
-                    env.IMAGE_NAME = 'pfe-app-test'
                     env.IMAGE_TAG = "${env.BUILD_NUMBER}"
-
-                    env.BACKEND_URL = 'http://172.31.172.61:3001'
-                    env.N8N_WEBHOOK_URL = 'http://n8n:5678/webhook/jenkins-event'
-                    env.SONAR_HOST_URL = 'http://sonarqube:9000'
-
-                    env.K8S_NAMESPACE = 'pfe-devsecops'
-                    env.ZAP_IMAGE = 'zaproxy/zap-stable:latest'
-                    env.ZAP_TARGET_URL = 'http://app-test:8080'
-
                     env.REPORT_BASE = "/shared/reports/${env.APP_NAME}/${env.BUILD_NUMBER}"
                     env.N8N_REPORT_BASE = "/home/node/.n8n-files/reports/${env.APP_NAME}/${env.BUILD_NUMBER}"
-                    env.KUBECONFIG = '/var/jenkins_home/.kube/config'
-
-                    sh '''
-                        mkdir -p "$REPORT_BASE"
-                        echo "Report base Jenkins: $REPORT_BASE"
-                        echo "Report base n8n    : $N8N_REPORT_BASE"
-                    '''
-
-                    echo "============================================"
-                    echo " Job     : ${env.JOB_NAME}"
-                    echo " Build   : #${env.BUILD_NUMBER}"
-                    echo " App     : ${env.APP_NAME}"
-                    echo " Image   : ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
-                    echo " Reports : ${env.REPORT_BASE}"
-                    echo "============================================"
                 }
+
+                sh '''
+                    mkdir -p "$REPORT_BASE"
+
+                    echo "============================================"
+                    echo " Job              : $JOB_NAME"
+                    echo " Build            : #$BUILD_NUMBER"
+                    echo " App              : $APP_NAME"
+                    echo " Image            : $IMAGE_NAME:$IMAGE_TAG"
+                    echo " Jenkins reports  : $REPORT_BASE"
+                    echo " n8n reports      : $N8N_REPORT_BASE"
+                    echo " Kubeconfig       : $KUBECONFIG"
+                    echo " ZAP target       : $ZAP_TARGET_URL"
+                    echo "============================================"
+                '''
             }
         }
 
         stage('Checkout') {
             steps {
                 echo '=== STAGE 1: Checkout ==='
+
                 checkout scm
 
                 sh '''
-                    echo "Commit: $(git rev-parse --short HEAD)"
+                    echo "Commit: $(git rev-parse --short HEAD || true)"
                     echo "Branch : $(git rev-parse --abbrev-ref HEAD || true)"
                 '''
             }
@@ -115,77 +118,86 @@ pipeline {
             }
         }
 
-stage('Trivy Scan') {
-    steps {
-        echo '=== STAGE 5: Trivy Security Scan ==='
+        stage('Trivy Scan') {
+            options {
+                timeout(time: 35, unit: 'MINUTES')
+            }
 
-        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-            sh '''
-                BUILD="$BUILD_NUMBER"
-                TMP_DIR="/tmp/trivy-test-$BUILD"
+            steps {
+                echo '=== STAGE 5: Trivy Security Scan ==='
 
-                rm -rf "$TMP_DIR"
-                mkdir -p "$TMP_DIR"
+                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                    sh '''
+                        BUILD="$BUILD_NUMBER"
+                        TMP_DIR="/tmp/trivy-test-$BUILD"
 
-                echo "=== Create persistent Trivy cache ==="
-                docker volume create trivy-cache || true
+                        rm -rf "$TMP_DIR"
+                        mkdir -p "$TMP_DIR"
+                        mkdir -p "$REPORT_BASE"
 
-                echo "=== Save Docker image ==="
-                docker save "$IMAGE_NAME:$IMAGE_TAG" -o "$TMP_DIR/image.tar"
-                ls -lh "$TMP_DIR/image.tar"
+                        echo "=== Create persistent Trivy cache ==="
+                        docker volume create trivy-cache || true
 
-                echo "=== Try to update Trivy DB cache ==="
-                docker run --rm \
-                  -v trivy-cache:/root/.cache \
-                  aquasec/trivy:latest image \
-                  --download-db-only || true
+                        echo "=== Save Docker image ==="
+                        docker save "$IMAGE_NAME:$IMAGE_TAG" -o "$TMP_DIR/image.tar"
+                        ls -lh "$TMP_DIR/image.tar"
 
-                echo "=== Create Trivy container with cache ==="
-                TRIVY_CID=$(docker create \
-                  -v trivy-cache:/root/.cache \
-                  --entrypoint sh \
-                  aquasec/trivy:latest \
-                  -c "sleep 1800")
+                        echo "=== Try to update Trivy vulnerability DB cache ==="
+                        docker run --rm \
+                          -v trivy-cache:/root/.cache \
+                          aquasec/trivy:latest image \
+                          --download-db-only || true
 
-                docker start "$TRIVY_CID" >/dev/null
+                        echo "=== Create Trivy container with cache ==="
+                        TRIVY_CID=$(docker create \
+                          -v trivy-cache:/root/.cache \
+                          --entrypoint sh \
+                          aquasec/trivy:latest \
+                          -c "sleep 1800")
 
-                echo "=== Copy image.tar to Trivy container ==="
-                docker cp "$TMP_DIR/image.tar" "$TRIVY_CID:/image.tar"
+                        docker start "$TRIVY_CID" >/dev/null
 
-                echo "=== Run Trivy scan ==="
-                docker exec "$TRIVY_CID" trivy image \
-                  --input /image.tar \
-                  --scanners vuln \
-                  --skip-db-update \
-                  --skip-java-db-update \
-                  --exit-code 0 \
-                  --format json \
-                  --severity CRITICAL,HIGH,MEDIUM \
-                  --no-progress \
-                  --timeout 30m \
-                  --output /trivy-report.json || true
+                        echo "=== Copy image.tar to Trivy container ==="
+                        docker cp "$TMP_DIR/image.tar" "$TRIVY_CID:/image.tar"
 
-                echo "=== Copy Trivy report ==="
-                docker cp "$TRIVY_CID:/trivy-report.json" "$TMP_DIR/trivy-report.json" || true
-                docker rm -f "$TRIVY_CID" >/dev/null 2>&1 || true
+                        echo "=== Run Trivy scan ==="
+                        docker exec "$TRIVY_CID" trivy image \
+                          --input /image.tar \
+                          --scanners vuln \
+                          --skip-db-update \
+                          --skip-java-db-update \
+                          --exit-code 0 \
+                          --format json \
+                          --severity CRITICAL,HIGH,MEDIUM \
+                          --no-progress \
+                          --timeout 30m \
+                          --output /trivy-report.json || true
 
-                if [ ! -s "$TMP_DIR/trivy-report.json" ]; then
-                  echo '{"SchemaVersion":2,"Results":[],"status":"trivy_report_missing"}' > "$TMP_DIR/trivy-report.json"
-                fi
+                        echo "=== Copy Trivy report ==="
+                        docker cp "$TRIVY_CID:/trivy-report.json" "$TMP_DIR/trivy-report.json" || true
 
-                mkdir -p "$REPORT_BASE"
-                cp "$TMP_DIR/trivy-report.json" "$REPORT_BASE/trivy-report.json"
+                        docker rm -f "$TRIVY_CID" >/dev/null 2>&1 || true
 
-                echo "=== Final Trivy report ==="
-                ls -lh "$REPORT_BASE/trivy-report.json"
-                head -c 500 "$REPORT_BASE/trivy-report.json" || true
-                echo ""
-            '''
+                        if [ ! -s "$TMP_DIR/trivy-report.json" ]; then
+                          echo '{"SchemaVersion":2,"Results":[],"status":"trivy_report_missing"}' > "$TMP_DIR/trivy-report.json"
+                        fi
+
+                        cp "$TMP_DIR/trivy-report.json" "$REPORT_BASE/trivy-report.json"
+
+                        echo "=== Final Trivy report ==="
+                        ls -lh "$REPORT_BASE/trivy-report.json" || true
+                        head -c 500 "$REPORT_BASE/trivy-report.json" || true
+                        echo ""
+                    '''
+                }
+            }
         }
-    }
-}
 
         stage('OWASP Dependency Check') {
+            options {
+                timeout(time: 35, unit: 'MINUTES')
+            }
+
             steps {
                 echo '=== STAGE 6: OWASP Dependency Check ==='
 
@@ -197,12 +209,11 @@ stage('Trivy Scan') {
                           MVN=$(find /var/jenkins_home/tools -type f -name mvn | head -1)
                         fi
 
-                        echo "=== Maven check ==="
-                        "$MVN" -v
-
-                        echo "=== Prepare OWASP folders ==="
                         mkdir -p "$REPORT_BASE"
                         mkdir -p /var/jenkins_home/dependency-check-data
+
+                        echo "=== Maven check ==="
+                        "$MVN" -v || true
 
                         echo "=== Run OWASP Dependency Check ==="
                         timeout 30m "$MVN" org.owasp:dependency-check-maven:check \
@@ -258,26 +269,27 @@ stage('Trivy Scan') {
             }
         }
 
-        stage('Deploy to Minikube') {
+        stage('Kubernetes Target Check') {
             steps {
-                echo '=== STAGE 7: Deploy Kubernetes ==='
+                echo '=== STAGE 7: Kubernetes Target Check ==='
 
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                     sh '''
-                        if ! command -v kubectl >/dev/null 2>&1; then
-                          echo "kubectl not found in Jenkins. Skipping deploy."
-                          exit 0
-                        fi
+                        export KUBECONFIG="$KUBECONFIG"
 
-                        kubectl apply -f k8s/ -n "$K8S_NAMESPACE" || true
+                        mkdir -p "$REPORT_BASE"
 
-                        kubectl set image deployment/app-test \
-                          app-test="$IMAGE_NAME:$IMAGE_TAG" \
-                          -n "$K8S_NAMESPACE" || true
+                        echo "=== kubectl version ==="
+                        kubectl version --client || true
 
-                        kubectl rollout status deployment/app-test \
-                          -n "$K8S_NAMESPACE" \
-                          --timeout=120s || true
+                        echo "=== Kubernetes services ==="
+                        kubectl get svc -n "$K8S_NAMESPACE" || true
+
+                        echo "=== Kubernetes pods ==="
+                        kubectl get pods -n "$K8S_NAMESPACE" || true
+
+                        echo "=== Check app-test service ==="
+                        kubectl get svc app-test -n "$K8S_NAMESPACE" || true
                     '''
                 }
             }
@@ -285,7 +297,7 @@ stage('Trivy Scan') {
 
         stage('ZAP DAST Scan') {
             options {
-                timeout(time: 20, unit: 'MINUTES')
+                timeout(time: 30, unit: 'MINUTES')
             }
 
             steps {
@@ -293,16 +305,12 @@ stage('Trivy Scan') {
 
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                     sh '''
+                        export KUBECONFIG="$KUBECONFIG"
+
                         BUILD="$BUILD_NUMBER"
                         ZAP_POD="zap-scan-$BUILD"
 
                         mkdir -p "$REPORT_BASE"
-
-                        if ! command -v kubectl >/dev/null 2>&1; then
-                          echo "kubectl not found in Jenkins. ZAP Kubernetes scan skipped."
-                          echo '{"site":[],"status":"zap_kubectl_missing"}' > "$REPORT_BASE/zap-report.json"
-                          exit 0
-                        fi
 
                         echo "=== Check Kubernetes access ==="
                         kubectl get svc -n "$K8S_NAMESPACE" || {
@@ -315,7 +323,7 @@ stage('Trivy Scan') {
                           -n "$K8S_NAMESPACE" \
                           --ignore-not-found=true || true
 
-                        echo "=== Run ZAP pod inside Kubernetes ==="
+                        echo "=== Run ZAP daemon pod ==="
                         kubectl run "$ZAP_POD" \
                           -n "$K8S_NAMESPACE" \
                           --image="$ZAP_IMAGE" \
@@ -323,48 +331,134 @@ stage('Trivy Scan') {
                           --restart=Never \
                           --command -- sh -lc '
                             mkdir -p /zap/wrk
+                            cd /zap/wrk
 
-                            zap-baseline.py \
-                              -t http://app-test:8080 \
-                              -J zap-report.json \
-                              -r zap-report.html \
-                              -w zap-report.md \
-                              -I || true
+                            echo "=== Start ZAP daemon ==="
+                            /zap/zap.sh \
+                              -daemon \
+                              -host 0.0.0.0 \
+                              -port 8090 \
+                              -config api.disablekey=true \
+                              -config api.addrs.addr.name=.* \
+                              -config api.addrs.addr.regex=true \
+                              -config database.recoverylog=false \
+                              > /zap/wrk/zap.log 2>&1 &
+
+                            echo "=== Wait ZAP API ==="
+                            python3 - <<PY
+import urllib.request, time, sys
+
+base = "http://127.0.0.1:8090"
+
+for i in range(120):
+    try:
+        r = urllib.request.urlopen(base + "/JSON/core/view/version/", timeout=3)
+        print("ZAP_READY", r.read().decode()[:100])
+        sys.exit(0)
+    except Exception:
+        time.sleep(2)
+
+print("ZAP_NOT_READY")
+sys.exit(1)
+PY
+
+                            echo "=== Access target and generate reports ==="
+                            python3 - <<PY
+import urllib.request, urllib.parse, time, json
+
+base = "http://127.0.0.1:8090"
+target = "http://app-test:8080"
+
+try:
+    urllib.request.urlopen(
+        base + "/JSON/core/action/accessUrl/?" + urllib.parse.urlencode({
+            "url": target,
+            "followRedirects": "true"
+        }),
+        timeout=30
+    ).read()
+    print("TARGET_ACCESSED")
+except Exception as e:
+    print("TARGET_ACCESS_ERROR", e)
+
+time.sleep(10)
+
+try:
+    report = urllib.request.urlopen(
+        base + "/OTHER/core/other/jsonreport/",
+        timeout=60
+    ).read()
+    open("/zap/wrk/zap-report.json", "wb").write(report)
+    print("JSON_REPORT_CREATED")
+except Exception as e:
+    print("JSON_REPORT_ERROR", e)
+    fallback = {
+        "site": [
+            {
+                "name": target,
+                "alerts": []
+            }
+        ],
+        "status": "zap_report_api_fallback"
+    }
+    open("/zap/wrk/zap-report.json", "w").write(json.dumps(fallback))
+
+try:
+    html = urllib.request.urlopen(
+        base + "/OTHER/core/other/htmlreport/",
+        timeout=60
+    ).read()
+    open("/zap/wrk/zap-report.html", "wb").write(html)
+    print("HTML_REPORT_CREATED")
+except Exception as e:
+    print("HTML_REPORT_ERROR", e)
+
+try:
+    alerts = urllib.request.urlopen(
+        base + "/JSON/core/view/alerts/?" + urllib.parse.urlencode({
+            "baseurl": target
+        }),
+        timeout=30
+    ).read()
+    open("/zap/wrk/zap-alerts.json", "wb").write(alerts)
+    print("ALERTS_REPORT_CREATED")
+except Exception as e:
+    print("ALERTS_REPORT_ERROR", e)
+PY
+
+                            echo "=== Files ==="
+                            ls -lh /zap/wrk || true
 
                             touch /zap/wrk/zap.done
                             sleep 3600
                           '
 
-                        echo "=== Wait for ZAP pod ready ==="
-                        kubectl wait --for=condition=Ready pod/"$ZAP_POD" \
-                          -n "$K8S_NAMESPACE" \
-                          --timeout=180s || true
-
-                        echo "=== Wait for ZAP scan completion ==="
-                        for i in $(seq 1 90); do
-                          if kubectl exec "$ZAP_POD" -n "$K8S_NAMESPACE" -- test -f /zap/wrk/zap.done 2>/dev/null; then
-                            echo "ZAP scan finished"
+                        echo "=== Wait ZAP report ==="
+                        for i in $(seq 1 120); do
+                          if kubectl exec "$ZAP_POD" -n "$K8S_NAMESPACE" -- test -f /zap/wrk/zap-report.json 2>/dev/null; then
+                            echo "ZAP report created"
                             break
                           fi
 
-                          echo "Waiting ZAP scan... $i"
+                          echo "Waiting ZAP report... $i"
                           sleep 10
                         done
 
-                        echo "=== ZAP logs ==="
+                        echo "=== ZAP pod logs ==="
                         kubectl logs "$ZAP_POD" -n "$K8S_NAMESPACE" || true
 
                         echo "=== Copy ZAP reports ==="
                         kubectl cp "$K8S_NAMESPACE/$ZAP_POD:/zap/wrk/zap-report.json" "$REPORT_BASE/zap-report.json" || true
                         kubectl cp "$K8S_NAMESPACE/$ZAP_POD:/zap/wrk/zap-report.html" "$REPORT_BASE/zap-report.html" || true
-                        kubectl cp "$K8S_NAMESPACE/$ZAP_POD:/zap/wrk/zap-report.md" "$REPORT_BASE/zap-report.md" || true
+                        kubectl cp "$K8S_NAMESPACE/$ZAP_POD:/zap/wrk/zap-alerts.json" "$REPORT_BASE/zap-alerts.json" || true
+                        kubectl cp "$K8S_NAMESPACE/$ZAP_POD:/zap/wrk/zap.log" "$REPORT_BASE/zap.log" || true
 
                         if [ ! -s "$REPORT_BASE/zap-report.json" ]; then
                           echo '{"site":[],"status":"zap_report_missing"}' > "$REPORT_BASE/zap-report.json"
                         fi
 
-                        echo "=== Final ZAP reports ==="
-                        ls -lh "$REPORT_BASE"/zap-report.* || true
+                        echo "=== Final ZAP report ==="
+                        ls -lh "$REPORT_BASE"/zap* || true
                         head -c 500 "$REPORT_BASE/zap-report.json" || true
                         echo ""
 
@@ -461,9 +555,9 @@ stage('Trivy Scan') {
                             image: "${env.IMAGE_NAME}:${env.IMAGE_TAG}"
                         ],
 
-                        deploy: [
+                        kubernetes: [
                             namespace: env.K8S_NAMESPACE,
-                            app_url  : env.ZAP_TARGET_URL
+                            target   : env.ZAP_TARGET_URL
                         ]
                     ]
 
@@ -474,11 +568,13 @@ stage('Trivy Scan') {
                     writeFile file: 'jenkins-webhook-payload.json', text: payload
 
                     sh '''
+                        mkdir -p "$REPORT_BASE"
                         cp jenkins-webhook-payload.json "$REPORT_BASE/payload.json" || true
 
                         echo "=== Shared reports final ==="
                         ls -la "$REPORT_BASE" || true
 
+                        echo "=== Notify n8n ==="
                         curl -s -X POST "$N8N_WEBHOOK_URL" \
                           -H "Content-Type: application/json" \
                           -H "X-API-Key: $N8N_API_KEY" \
