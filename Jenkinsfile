@@ -34,6 +34,7 @@ pipeline {
 
                     env.REPORT_BASE = "/shared/reports/${env.APP_NAME}/${env.BUILD_NUMBER}"
                     env.N8N_REPORT_BASE = "/home/node/.n8n-files/reports/${env.APP_NAME}/${env.BUILD_NUMBER}"
+                    env.KUBECONFIG = '/var/jenkins_home/.kube/config'
 
                     sh '''
                         mkdir -p "$REPORT_BASE"
