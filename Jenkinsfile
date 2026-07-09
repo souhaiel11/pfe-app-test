@@ -194,80 +194,85 @@ pipeline {
         }
 
         stage('OWASP Dependency Check') {
-            options {
-                timeout(time: 35, unit: 'MINUTES')
-            }
+    options {
+        timeout(time: 45, unit: 'MINUTES')
+    }
 
-            steps {
-                echo '=== STAGE 6: OWASP Dependency Check ==='
+    steps {
+        echo '=== STAGE 6: OWASP Dependency Check ==='
 
-                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    sh '''
-                        MVN="/var/jenkins_home/tools/hudson.tasks.Maven_MavenInstallation/M3/bin/mvn"
+        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+            sh '''
+                MVN="/var/jenkins_home/tools/hudson.tasks.Maven_MavenInstallation/M3/bin/mvn"
+                ODC_VERSION="12.2.2"
+                ODC_DATA="/var/jenkins_home/dependency-check-data-v12"
 
-                        if [ ! -x "$MVN" ]; then
-                          MVN=$(find /var/jenkins_home/tools -type f -name mvn | head -1)
-                        fi
+                if [ ! -x "$MVN" ]; then
+                  MVN=$(find /var/jenkins_home/tools -type f -name mvn | head -1)
+                fi
 
-                        mkdir -p "$REPORT_BASE"
-                        mkdir -p /var/jenkins_home/dependency-check-data
+                mkdir -p "$REPORT_BASE"
+                mkdir -p "$ODC_DATA"
 
-                        echo "=== Maven check ==="
-                        "$MVN" -v || true
+                echo "=== Maven check ==="
+                "$MVN" -v || true
 
-                        echo "=== Run OWASP Dependency Check ==="
-                        timeout 30m "$MVN" org.owasp:dependency-check-maven:check \
-                          -Dformat=ALL \
-                          -DfailBuildOnCVSS=11 \
-                          -DfailOnError=false \
-                          -DdataDirectory=/var/jenkins_home/dependency-check-data \
-                          -DnvdApiKey="$NVD_API_KEY" \
-                          -DnvdApiDelay=6000 \
-                          -DskipTests=true \
-                          -DretireJsAnalyzerEnabled=false \
-                          -DnodeAuditAnalyzerEnabled=false \
-                          -DossindexAnalyzerEnabled=false \
-                          -DknownExploitedEnabled=false \
-                          -DhostedSuppressionsEnabled=false \
-                          -B || true
+                echo "=== OWASP Dependency-Check version ==="
+                echo "$ODC_VERSION"
 
-                        echo "=== Try OWASP offline mode if report missing ==="
-                        if [ ! -f target/dependency-check-report.json ]; then
-                          timeout 10m "$MVN" org.owasp:dependency-check-maven:check \
-                            -Dformat=ALL \
-                            -DfailBuildOnCVSS=11 \
-                            -DfailOnError=false \
-                            -DdataDirectory=/var/jenkins_home/dependency-check-data \
-                            -DautoUpdate=false \
-                            -DskipTests=true \
-                            -DretireJsAnalyzerEnabled=false \
-                            -DnodeAuditAnalyzerEnabled=false \
-                            -DossindexAnalyzerEnabled=false \
-                            -DknownExploitedEnabled=false \
-                            -DhostedSuppressionsEnabled=false \
-                            -B || true
-                        fi
+                echo "=== Step 1: Update OWASP NVD cache ==="
+                timeout 35m "$MVN" org.owasp:dependency-check-maven:$ODC_VERSION:update-only \
+                  -DdataDirectory="$ODC_DATA" \
+                  -DnvdApiKey="$NVD_API_KEY" \
+                  -DnvdApiDelay=6000 \
+                  -DnvdMaxRetryCount=20 \
+                  -DnvdValidForHours=168 \
+                  -DretireJsAnalyzerEnabled=false \
+                  -DnodeAuditAnalyzerEnabled=false \
+                  -DossindexAnalyzerEnabled=false \
+                  -DknownExploitedEnabled=false \
+                  -DhostedSuppressionsEnabled=false \
+                  -B || true
 
-                        echo "=== Copy OWASP reports ==="
+                echo "=== Step 2: Run OWASP scan using local cache ==="
+                timeout 20m "$MVN" org.owasp:dependency-check-maven:$ODC_VERSION:check \
+                  -Dformat=ALL \
+                  -DfailBuildOnCVSS=11 \
+                  -DfailOnError=false \
+                  -DdataDirectory="$ODC_DATA" \
+                  -DautoUpdate=false \
+                  -DskipTests=true \
+                  -DretireJsAnalyzerEnabled=false \
+                  -DnodeAuditAnalyzerEnabled=false \
+                  -DossindexAnalyzerEnabled=false \
+                  -DknownExploitedEnabled=false \
+                  -DhostedSuppressionsEnabled=false \
+                  -B || true
 
-                        if [ -f target/dependency-check-report.json ]; then
-                          cp target/dependency-check-report.json "$REPORT_BASE/dependency-check-report.json"
-                        else
-                          echo '{"dependencies":[],"status":"owasp_report_missing"}' > "$REPORT_BASE/dependency-check-report.json"
-                        fi
+                echo "=== Copy OWASP reports ==="
 
-                        if [ -f target/dependency-check-report.html ]; then
-                          cp target/dependency-check-report.html "$REPORT_BASE/dependency-check-report.html"
-                        fi
+                if [ -f target/dependency-check-report.json ]; then
+                  cp target/dependency-check-report.json "$REPORT_BASE/dependency-check-report.json"
+                else
+                  echo '{"dependencies":[],"status":"owasp_report_missing"}' > "$REPORT_BASE/dependency-check-report.json"
+                fi
 
-                        echo "=== Final OWASP reports ==="
-                        ls -lh "$REPORT_BASE"/dependency-check-report.* || true
-                        head -c 500 "$REPORT_BASE/dependency-check-report.json" || true
-                        echo ""
-                    '''
-                }
-            }
+                if [ -f target/dependency-check-report.html ]; then
+                  cp target/dependency-check-report.html "$REPORT_BASE/dependency-check-report.html"
+                fi
+
+                if [ -f target/dependency-check-report.xml ]; then
+                  cp target/dependency-check-report.xml "$REPORT_BASE/dependency-check-report.xml"
+                fi
+
+                echo "=== Final OWASP reports ==="
+                ls -lh "$REPORT_BASE"/dependency-check-report.* || true
+                head -c 500 "$REPORT_BASE/dependency-check-report.json" || true
+                echo ""
+            '''
         }
+    }
+}
 
         stage('Kubernetes Target Check') {
             steps {
