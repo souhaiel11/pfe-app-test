@@ -26,6 +26,10 @@ pipeline {
 
         ZAP_IMAGE = 'zaproxy/zap-stable:latest'
         ZAP_TARGET_URL = 'http://app-test:8080'
+
+        // ★ PR-CONTEXT : détection du contexte d'exécution
+        IS_PR = "${env.CHANGE_ID ? 'true' : 'false'}"
+        BUILD_CONTEXT = "${env.CHANGE_ID ? 'pull_request' : 'branch'}"
     }
 
     stages {
@@ -46,6 +50,8 @@ pipeline {
                     echo " Build            : #$BUILD_NUMBER"
                     echo " App              : $APP_NAME"
                     echo " Image            : $IMAGE_NAME:$IMAGE_TAG"
+                    echo " Context          : $BUILD_CONTEXT"
+                    echo " Is PR            : $IS_PR"
                     echo " Jenkins reports  : $REPORT_BASE"
                     echo " n8n reports      : $N8N_REPORT_BASE"
                     echo " Kubeconfig       : $KUBECONFIG"
@@ -88,15 +94,29 @@ pipeline {
 
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                     withSonarQubeEnv('sq1') {
-                        sh '''
-                            mvn sonar:sonar -B \
-                              -DskipTests=true \
-                              -Djacoco.skip=true \
-                              -Dsonar.projectKey="$APP_NAME" \
-                              -Dsonar.projectName="PFE App Test" \
-                              -Dsonar.host.url="$SONAR_HOST_URL" \
-                              -Dsonar.token="$SONAR_TOKEN" || true
-                        '''
+                        script {
+                            // ★ PR-CONTEXT : mode PR si CHANGE_ID présent
+                            def prArgs = ''
+                            if (env.CHANGE_ID) {
+                                echo "SonarQube en mode Pull Request #${env.CHANGE_ID}"
+                                prArgs = " -Dsonar.pullrequest.key=${env.CHANGE_ID}" +
+                                         " -Dsonar.pullrequest.branch=${env.CHANGE_BRANCH}" +
+                                         " -Dsonar.pullrequest.base=${env.CHANGE_TARGET}"
+                            } else {
+                                echo "SonarQube en mode branche standard"
+                            }
+
+                            sh """
+                                mvn sonar:sonar -B \
+                                  -DskipTests=true \
+                                  -Djacoco.skip=true \
+                                  -Dsonar.projectKey="\$APP_NAME" \
+                                  -Dsonar.projectName="PFE App Test" \
+                                  -Dsonar.host.url="\$SONAR_HOST_URL" \
+                                  -Dsonar.token="\$SONAR_TOKEN" \
+                                  ${prArgs} || true
+                            """
+                        }
                     }
                 }
             }
@@ -194,91 +214,95 @@ pipeline {
         }
 
         stage('OWASP Dependency Check') {
-    options {
-        timeout(time: 75, unit: 'MINUTES')
-    }
+            options {
+                timeout(time: 75, unit: 'MINUTES')
+            }
 
-    steps {
-        echo '=== STAGE 6: OWASP Dependency Check ==='
+            steps {
+                echo '=== STAGE 6: OWASP Dependency Check ==='
 
-        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-            sh '''
-                MVN="/var/jenkins_home/tools/hudson.tasks.Maven_MavenInstallation/M3/bin/mvn"
-                ODC_VERSION="12.2.2"
-                ODC_DATA="/var/jenkins_home/dependency-check-data-v12"
+                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                    sh '''
+                        MVN="/var/jenkins_home/tools/hudson.tasks.Maven_MavenInstallation/M3/bin/mvn"
+                        ODC_VERSION="12.2.2"
+                        ODC_DATA="/var/jenkins_home/dependency-check-data-v12"
 
-                if [ ! -x "$MVN" ]; then
-                  MVN=$(find /var/jenkins_home/tools -type f -name mvn | head -1)
-                fi
+                        if [ ! -x "$MVN" ]; then
+                          MVN=$(find /var/jenkins_home/tools -type f -name mvn | head -1)
+                        fi
 
-                mkdir -p "$REPORT_BASE"
-                mkdir -p "$ODC_DATA"
+                        mkdir -p "$REPORT_BASE"
+                        mkdir -p "$ODC_DATA"
 
-                echo "=== Maven check ==="
-                "$MVN" -v || true
+                        echo "=== Maven check ==="
+                        "$MVN" -v || true
 
-                echo "=== OWASP Dependency-Check version ==="
-                echo "$ODC_VERSION"
+                        echo "=== OWASP Dependency-Check version ==="
+                        echo "$ODC_VERSION"
 
-                echo "=== Step 1: Update OWASP NVD cache WITHOUT API key ==="
-                {
-                  timeout 60m "$MVN" org.owasp:dependency-check-maven:$ODC_VERSION:update-only \
-                    -DdataDirectory="$ODC_DATA" \
-                    -DnvdApiDelay=10000 \
-                    -DnvdMaxRetryCount=30 \
-                    -DnvdValidForHours=168 \
-                    -DretireJsAnalyzerEnabled=false \
-                    -DnodeAuditAnalyzerEnabled=false \
-                    -DossindexAnalyzerEnabled=false \
-                    -DknownExploitedEnabled=false \
-                    -DhostedSuppressionsEnabled=false \
-                    -B || true
+                        echo "=== Step 1: Update OWASP NVD cache WITHOUT API key ==="
+                        {
+                          timeout 60m "$MVN" org.owasp:dependency-check-maven:$ODC_VERSION:update-only \
+                            -DdataDirectory="$ODC_DATA" \
+                            -DnvdApiDelay=10000 \
+                            -DnvdMaxRetryCount=30 \
+                            -DnvdValidForHours=168 \
+                            -DretireJsAnalyzerEnabled=false \
+                            -DnodeAuditAnalyzerEnabled=false \
+                            -DossindexAnalyzerEnabled=false \
+                            -DknownExploitedEnabled=false \
+                            -DhostedSuppressionsEnabled=false \
+                            -B || true
 
-                  echo "=== Step 2: Run OWASP scan using local cache ==="
+                          echo "=== Step 2: Run OWASP scan using local cache ==="
 
-                  timeout 20m "$MVN" org.owasp:dependency-check-maven:$ODC_VERSION:check \
-                    -Dformat=ALL \
-                    -DfailBuildOnCVSS=11 \
-                    -DfailOnError=false \
-                    -DdataDirectory="$ODC_DATA" \
-                    -DautoUpdate=false \
-                    -DskipTests=true \
-                    -DretireJsAnalyzerEnabled=false \
-                    -DnodeAuditAnalyzerEnabled=false \
-                    -DossindexAnalyzerEnabled=false \
-                    -DknownExploitedEnabled=false \
-                    -DhostedSuppressionsEnabled=false \
-                    -B || true
-                } > "$REPORT_BASE/owasp.log" 2>&1
+                          timeout 20m "$MVN" org.owasp:dependency-check-maven:$ODC_VERSION:check \
+                            -Dformat=ALL \
+                            -DfailBuildOnCVSS=11 \
+                            -DfailOnError=false \
+                            -DdataDirectory="$ODC_DATA" \
+                            -DautoUpdate=false \
+                            -DskipTests=true \
+                            -DretireJsAnalyzerEnabled=false \
+                            -DnodeAuditAnalyzerEnabled=false \
+                            -DossindexAnalyzerEnabled=false \
+                            -DknownExploitedEnabled=false \
+                            -DhostedSuppressionsEnabled=false \
+                            -B || true
+                        } > "$REPORT_BASE/owasp.log" 2>&1
 
-                echo "=== OWASP log tail ==="
-                tail -120 "$REPORT_BASE/owasp.log" || true
+                        echo "=== OWASP log tail ==="
+                        tail -120 "$REPORT_BASE/owasp.log" || true
 
-                echo "=== Copy OWASP reports ==="
+                        echo "=== Copy OWASP reports ==="
 
-                if [ -f target/dependency-check-report.json ]; then
-                  cp target/dependency-check-report.json "$REPORT_BASE/dependency-check-report.json"
-                else
-                  echo '{"dependencies":[],"status":"owasp_report_missing"}' > "$REPORT_BASE/dependency-check-report.json"
-                fi
+                        if [ -f target/dependency-check-report.json ]; then
+                          cp target/dependency-check-report.json "$REPORT_BASE/dependency-check-report.json"
+                        else
+                          echo '{"dependencies":[],"status":"owasp_report_missing"}' > "$REPORT_BASE/dependency-check-report.json"
+                        fi
 
-                if [ -f target/dependency-check-report.html ]; then
-                  cp target/dependency-check-report.html "$REPORT_BASE/dependency-check-report.html"
-                fi
+                        if [ -f target/dependency-check-report.html ]; then
+                          cp target/dependency-check-report.html "$REPORT_BASE/dependency-check-report.html"
+                        fi
 
-                if [ -f target/dependency-check-report.xml ]; then
-                  cp target/dependency-check-report.xml "$REPORT_BASE/dependency-check-report.xml"
-                fi
+                        if [ -f target/dependency-check-report.xml ]; then
+                          cp target/dependency-check-report.xml "$REPORT_BASE/dependency-check-report.xml"
+                        fi
 
-                echo "=== Final OWASP reports ==="
-                ls -lh "$REPORT_BASE"/dependency-check-report.* "$REPORT_BASE/owasp.log" || true
-                head -c 500 "$REPORT_BASE/dependency-check-report.json" || true
-                echo ""
-            '''
+                        echo "=== Final OWASP reports ==="
+                        ls -lh "$REPORT_BASE"/dependency-check-report.* "$REPORT_BASE/owasp.log" || true
+                        head -c 500 "$REPORT_BASE/dependency-check-report.json" || true
+                        echo ""
+                    '''
+                }
+            }
         }
-    }
-}
+
         stage('Kubernetes Target Check') {
+            // ★ PR-CONTEXT : ne pas déployer/vérifier le cluster sur une PR
+            when { expression { env.CHANGE_ID == null } }
+
             steps {
                 echo '=== STAGE 7: Kubernetes Target Check ==='
 
@@ -305,6 +329,9 @@ pipeline {
         }
 
         stage('ZAP DAST Scan') {
+            // ★ PR-CONTEXT : pas de DAST sur une PR (app non redéployée)
+            when { expression { env.CHANGE_ID == null } }
+
             options {
                 timeout(time: 30, unit: 'MINUTES')
             }
@@ -489,9 +516,15 @@ PY
                 try {
                     def buildStatus = currentBuild.currentResult ?: 'SUCCESS'
 
-                    def event = buildStatus == 'SUCCESS'  ? 'pipeline_success'
+                    // ★ PR-CONTEXT : event différent selon contexte
+                    def event
+                    if (env.CHANGE_ID) {
+                        event = 'pr_validation'   // -> routé vers WF3 par WF1
+                    } else {
+                        event = buildStatus == 'SUCCESS'  ? 'pipeline_success'
                               : buildStatus == 'UNSTABLE' ? 'pipeline_unstable'
-                              : 'pipeline_failed'
+                              : 'pipeline_failed'   // -> analyse WF1
+                    }
 
                     def severity = buildStatus == 'FAILURE'  ? 'HIGH'
                                  : buildStatus == 'UNSTABLE' ? 'MEDIUM'
@@ -526,6 +559,15 @@ PY
                         status      : buildStatus,
                         severity    : severity,
                         duration_ms : currentBuild.duration,
+
+                        // ★ PR-CONTEXT : bloc pull_request (null si build sur branche)
+                        pull_request: env.CHANGE_ID ? [
+                            number: env.CHANGE_ID,
+                            branch: env.CHANGE_BRANCH,
+                            target: env.CHANGE_TARGET,
+                            url   : env.CHANGE_URL,
+                            title : env.CHANGE_TITLE
+                        ] : null,
 
                         reports: [
                             jenkinsBasePath: env.REPORT_BASE,
