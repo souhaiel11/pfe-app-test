@@ -11,7 +11,6 @@ pipeline {
         timeout(time: 3, unit: 'HOURS')
         // Conserve les logs et rapports des 15 derniers builds seulement.
         buildDiscarder(logRotator(numToKeepStr: '15'))
-        timestamps()
     }
 
     // ─────────────────────────────────────────────────────────────
