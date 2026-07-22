@@ -321,6 +321,8 @@ pipeline {
                           --image="$ZAP_IMAGE" \
                           --image-pull-policy=IfNotPresent \
                           --restart=Never \
+                          --requests='memory=768Mi,cpu=500m' \
+                          --limits='memory=1536Mi,cpu=1' \
                           --command -- sh -lc '
                             mkdir -p /zap/wrk && cd /zap/wrk
 
@@ -343,13 +345,19 @@ def call(path, params=None, timeout=30):
         url += "?" + urllib.parse.urlencode(params)
     return urllib.request.urlopen(url, timeout=timeout).read().decode()
 
-for _ in range(120):
+for _ in range(240):
     try:
         call("/JSON/core/view/version/", timeout=3); print("ZAP_READY"); break
     except Exception:
-        time.sleep(2)
+        time.sleep(3)
 else:
-    print("ZAP_NOT_READY"); sys.exit(1)
+    print("ZAP_NOT_READY_AFTER_720S")
+    try:
+        print("ZAP_LOG_TAIL:")
+        print(open("/zap/wrk/zap.log").read()[-2000:])
+    except Exception as e2:
+        print("COULD_NOT_READ_LOG", e2)
+    sys.exit(1)
 
 try:
     call("/JSON/core/action/accessUrl/", {"url": target, "followRedirects": "true"})
@@ -395,8 +403,8 @@ PY
                             sleep 3600
                           '
 
-                        echo "=== Attente du rapport ZAP ==="
-                        for i in $(seq 1 180); do
+                        echo "=== Attente du rapport ZAP (jusqu a 36 min) ==="
+                        for i in $(seq 1 220); do
                           if kubectl exec "$ZAP_POD" -n "$K8S_NAMESPACE" -- test -f /zap/wrk/zap.done 2>/dev/null; then
                             echo "ZAP termine"; break
                           fi
