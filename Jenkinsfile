@@ -7,57 +7,41 @@ pipeline {
 
     options {
         disableConcurrentBuilds()
-        // Garde-fou global : aucun build ne peut durer indéfiniment.
         timeout(time: 3, unit: 'HOURS')
-        // Conserve les logs et rapports des 15 derniers builds seulement.
         buildDiscarder(logRotator(numToKeepStr: '15'))
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // PARAMÈTRES : rendent explicites les choix d'architecture.
-    // Par défaut, Jenkins NE bloque PAS : c'est la plateforme (n8n)
-    // qui décide BLOCK / AUTO_FIX / NOTIFY. Jenkins est un collecteur.
-    // Le jury peut voir ce choix au lieu de le deviner.
-    // ─────────────────────────────────────────────────────────────
     parameters {
         booleanParam(
             name: 'JENKINS_HARD_GATE',
             defaultValue: false,
-            description: 'Si true, Jenkins échoue lui-même sur CVE critique. Par défaut false : enforcement délégué à la plateforme.'
+            description: 'Si true, Jenkins echoue lui-meme sur CVE critique. Par defaut false : enforcement delegue a la plateforme.'
         )
         string(
             name: 'CVSS_FAIL_THRESHOLD',
             defaultValue: '9.0',
-            description: 'Seuil CVSS de blocage, utilisé uniquement si JENKINS_HARD_GATE=true.'
+            description: 'Seuil CVSS de blocage, utilise uniquement si JENKINS_HARD_GATE=true.'
         )
     }
 
     environment {
-        // ── Secrets (coffre Jenkins, jamais en dur) ──
         N8N_API_KEY = credentials('N8N_API_KEY')
         NVD_API_KEY = credentials('NVD_API_KEY')
         SONAR_TOKEN = credentials('SONAR_TOKEN')
 
-        // ── Identité applicative ──
         APP_NAME   = 'pfe-app-test'
         IMAGE_NAME = 'pfe-app-test'
 
-        // ── Services : résolus par DNS Docker (nom de conteneur), pas d'IP en dur ──
-        // NOTE : si pfe-backend n'est pas joignable par nom depuis le conteneur
-        // Jenkins, vérifier qu'ils partagent bien le réseau pfe-network.
         BACKEND_URL     = 'http://pfe-backend:3001'
         N8N_WEBHOOK_URL = 'http://n8n:5678/webhook/jenkins-event'
         SONAR_HOST_URL  = 'http://sonarqube:9000'
 
-        // ── Kubernetes ──
         K8S_NAMESPACE = 'pfe-devsecops'
         KUBECONFIG    = '/var/jenkins_home/.kube/config'
 
-        // ── ZAP / cible DAST ──
         ZAP_IMAGE      = 'zaproxy/zap-stable:latest'
         ZAP_TARGET_URL = 'http://app-test:8080'
 
-        // ── Contexte d'exécution : PR ou branche ? ──
         IS_PR         = "${env.CHANGE_ID ? 'true' : 'false'}"
         BUILD_CONTEXT = "${env.CHANGE_ID ? 'pull_request' : 'branch'}"
     }
@@ -104,23 +88,13 @@ pipeline {
         }
 
         stage('Build') {
-                    steps {
-                        echo '=== STAGE 2: Maven Build ==='
-                        // Tests désactivés : l'app de démo contient des tests volontairement
-                        // cassés (illustration DevSecOps). La qualité du code est évaluée par
-                        // SonarQube au stage suivant, pas par les tests unitaires.
-                        catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                            sh '''
-                                set -e
-                                mvn clean package -B -DskipTests=true -Djacoco.skip=true
-                            '''
-                        }
-                    }
-                }
-            post {
-                always {
-                    // Publie les résultats de tests s'il y en a (ne casse pas s'il n'y en a pas).
-                    junit testResults: '**/target/surefire-reports/*.xml', allowEmptyResults: true
+            steps {
+                echo '=== STAGE 2: Maven Build (tests skippes) ==='
+                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                    sh '''
+                        set -e
+                        mvn clean package -B -DskipTests=true -Djacoco.skip=true
+                    '''
                 }
             }
         }
@@ -143,6 +117,8 @@ pipeline {
                             sh """
                                 set -e
                                 mvn sonar:sonar -B \
+                                  -DskipTests=true \
+                                  -Djacoco.skip=true \
                                   -Dsonar.projectKey="\$APP_NAME" \
                                   -Dsonar.projectName="PFE App Test" \
                                   -Dsonar.host.url="\$SONAR_HOST_URL" \
@@ -164,7 +140,7 @@ pipeline {
                         docker build -t "$IMAGE_NAME:$IMAGE_TAG" .
                         docker tag "$IMAGE_NAME:$IMAGE_TAG" "$IMAGE_NAME:latest"
 
-                        echo "=== Docker image créée ==="
+                        echo "=== Docker image creee ==="
                         docker images | grep "$IMAGE_NAME" || true
                     '''
                 }
@@ -174,7 +150,7 @@ pipeline {
         stage('Trivy Scan') {
             options { timeout(time: 35, unit: 'MINUTES') }
             steps {
-                echo '=== STAGE 5: Trivy (vulnérabilités + misconfig) ==='
+                echo '=== STAGE 5: Trivy (vulnerabilites + misconfig) ==='
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                     sh '''
                         set -e
@@ -187,10 +163,10 @@ pipeline {
                         echo "=== Cache Trivy persistant ==="
                         docker volume create trivy-cache >/dev/null || true
 
-                        echo "=== Export de l'image ==="
+                        echo "=== Export de l image ==="
                         docker save "$IMAGE_NAME:$IMAGE_TAG" -o "$TMP_DIR/image.tar"
 
-                        echo "=== Mise à jour de la base Trivy ==="
+                        echo "=== Mise a jour de la base Trivy ==="
                         docker run --rm -v trivy-cache:/root/.cache \
                           aquasec/trivy:latest image --download-db-only || true
 
@@ -200,9 +176,6 @@ pipeline {
                         docker start "$TRIVY_CID" >/dev/null
                         docker cp "$TMP_DIR/image.tar" "$TRIVY_CID:/image.tar"
 
-                        # --scanners vuln,misconfig : détecte AUSSI le conteneur en root
-                        # et les mauvaises pratiques Dockerfile.
-                        # --exit-code 0 : Trivy ne bloque pas ; l'enforcement est côté plateforme.
                         echo "=== Scan Trivy ==="
                         docker exec "$TRIVY_CID" trivy image \
                           --input /image.tar \
@@ -219,7 +192,6 @@ pipeline {
                         docker cp "$TRIVY_CID:/trivy-report.json" "$TMP_DIR/trivy-report.json" || true
                         docker rm -f "$TRIVY_CID" >/dev/null 2>&1 || true
 
-                        # Fallback si le rapport est vide : n8n ne doit jamais planter sur un fichier manquant.
                         if [ ! -s "$TMP_DIR/trivy-report.json" ]; then
                           echo '{"SchemaVersion":2,"Results":[],"status":"trivy_report_missing"}' > "$TMP_DIR/trivy-report.json"
                         fi
@@ -239,8 +211,6 @@ pipeline {
             steps {
                 echo '=== STAGE 6: OWASP Dependency-Check (SCA) ==='
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    // La clé NVD est passée à OWASP -> mise à jour rapide (minutes, pas heures).
-                    // failBuildOnCVSS piloté par paramètre : non bloquant par défaut.
                     sh '''
                         set -e
                         ODC_VERSION="12.2.2"
@@ -251,12 +221,12 @@ pipeline {
                         if [ "$JENKINS_HARD_GATE" = "true" ]; then
                           FAIL_CVSS="$CVSS_FAIL_THRESHOLD"
                         else
-                          FAIL_CVSS="11"   # >10 = jamais bloquant : collecte pure
+                          FAIL_CVSS="11"
                         fi
                         echo "OWASP failBuildOnCVSS = $FAIL_CVSS"
 
                         {
-                          echo "=== Étape 1 : mise à jour NVD (avec clé API) ==="
+                          echo "=== Etape 1 : mise a jour NVD (avec cle API) ==="
                           timeout 20m mvn org.owasp:dependency-check-maven:$ODC_VERSION:update-only \
                             -DdataDirectory="$ODC_DATA" \
                             -DnvdApiKey="$NVD_API_KEY" \
@@ -268,7 +238,7 @@ pipeline {
                             -DossindexAnalyzerEnabled=false \
                             -B || true
 
-                          echo "=== Étape 2 : scan des dépendances (cache local) ==="
+                          echo "=== Etape 2 : scan des dependances (cache local) ==="
                           timeout 20m mvn org.owasp:dependency-check-maven:$ODC_VERSION:check \
                             -Dformat=ALL \
                             -DfailBuildOnCVSS="$FAIL_CVSS" \
@@ -284,7 +254,6 @@ pipeline {
                         echo "=== Fin de log OWASP ==="
                         tail -80 "$REPORT_BASE/owasp.log" || true
 
-                        # Copie des rapports + fallback JSON
                         if [ -f target/dependency-check-report.json ]; then
                           cp target/dependency-check-report.json "$REPORT_BASE/dependency-check-report.json"
                         else
@@ -303,7 +272,7 @@ pipeline {
         stage('Kubernetes Target Check') {
             when { expression { env.CHANGE_ID == null } }
             steps {
-                echo '=== STAGE 7: Vérification cible Kubernetes ==='
+                echo '=== STAGE 7: Verification cible Kubernetes ==='
                 catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
                     sh '''
                         set +e
@@ -337,7 +306,7 @@ pipeline {
                         ZAP_POD="zap-scan-$BUILD"
                         mkdir -p "$REPORT_BASE"
 
-                        echo "=== Accès Kubernetes ==="
+                        echo "=== Acces Kubernetes ==="
                         if ! kubectl get svc -n "$K8S_NAMESPACE" >/dev/null 2>&1; then
                           echo '{"site":[],"status":"zap_k8s_unreachable"}' > "$REPORT_BASE/zap-report.json"
                           exit 0
@@ -346,7 +315,7 @@ pipeline {
                         echo "=== Nettoyage ancien pod ==="
                         kubectl delete pod "$ZAP_POD" -n "$K8S_NAMESPACE" --ignore-not-found=true || true
 
-                        echo "=== Lancement du pod ZAP (vrai scan : spider puis active scan) ==="
+                        echo "=== Lancement du pod ZAP (spider puis active scan) ==="
                         kubectl run "$ZAP_POD" \
                           -n "$K8S_NAMESPACE" \
                           --image="$ZAP_IMAGE" \
@@ -374,7 +343,6 @@ def call(path, params=None, timeout=30):
         url += "?" + urllib.parse.urlencode(params)
     return urllib.request.urlopen(url, timeout=timeout).read().decode()
 
-# 1) Attendre que ZAP soit prêt
 for _ in range(120):
     try:
         call("/JSON/core/view/version/", timeout=3); print("ZAP_READY"); break
@@ -383,14 +351,12 @@ for _ in range(120):
 else:
     print("ZAP_NOT_READY"); sys.exit(1)
 
-# 2) Accès initial à la cible
 try:
     call("/JSON/core/action/accessUrl/", {"url": target, "followRedirects": "true"})
     print("TARGET_ACCESSED")
 except Exception as e:
     print("TARGET_ACCESS_ERROR", e)
 
-# 3) SPIDER : découverte des URLs
 try:
     sid = json.loads(call("/JSON/spider/action/scan/", {"url": target, "recurse": "true"}))["scan"]
     while True:
@@ -401,7 +367,6 @@ try:
 except Exception as e:
     print("SPIDER_ERROR", e)
 
-# 4) ACTIVE SCAN : test réel des vulnérabilités
 try:
     aid = json.loads(call("/JSON/ascan/action/scan/", {"url": target, "recurse": "true"}))["scan"]
     while True:
@@ -412,7 +377,6 @@ try:
 except Exception as e:
     print("ACTIVE_SCAN_ERROR", e)
 
-# 5) Rapports
 try:
     open("/zap/wrk/zap-report.json","w").write(call("/OTHER/core/other/jsonreport/", timeout=60))
     print("JSON_REPORT_CREATED")
@@ -434,7 +398,7 @@ PY
                         echo "=== Attente du rapport ZAP ==="
                         for i in $(seq 1 180); do
                           if kubectl exec "$ZAP_POD" -n "$K8S_NAMESPACE" -- test -f /zap/wrk/zap.done 2>/dev/null; then
-                            echo "ZAP terminé"; break
+                            echo "ZAP termine"; break
                           fi
                           echo "Attente ZAP... $i"; sleep 10
                         done
@@ -442,7 +406,7 @@ PY
                         echo "=== Logs ZAP ==="
                         kubectl logs "$ZAP_POD" -n "$K8S_NAMESPACE" || true
 
-                        echo "=== Récupération des rapports ==="
+                        echo "=== Recuperation des rapports ==="
                         kubectl cp "$K8S_NAMESPACE/$ZAP_POD:/zap/wrk/zap-report.json" "$REPORT_BASE/zap-report.json" || true
                         kubectl cp "$K8S_NAMESPACE/$ZAP_POD:/zap/wrk/zap-report.html" "$REPORT_BASE/zap-report.html" || true
                         kubectl cp "$K8S_NAMESPACE/$ZAP_POD:/zap/wrk/zap.log"        "$REPORT_BASE/zap.log"        || true
@@ -476,9 +440,6 @@ PY
                               :                             'pipeline_failed'
                     }
 
-                    // severity_hint : indication grossière issue du STATUT de build.
-                    // La sévérité réelle est RECALCULÉE par la plateforme à partir
-                    // des rapports. Ce champ n'est qu'un indice, jamais une décision.
                     def severityHint = buildStatus == 'FAILURE'  ? 'HIGH'
                                      : buildStatus == 'UNSTABLE' ? 'MEDIUM'
                                      :                             'LOW'
@@ -532,7 +493,6 @@ PY
 
                     sh 'mkdir -p "$REPORT_BASE" && cp jenkins-webhook-payload.json "$REPORT_BASE/payload.json" || true'
 
-                    // ── Webhook AVEC RETRY : 3 tentatives, échec tracé (plus de perte silencieuse) ──
                     def notified = false
                     for (int attempt = 1; attempt <= 3 && !notified; attempt++) {
                         echo "Notification n8n : tentative ${attempt}/3"
@@ -547,32 +507,29 @@ PY
                                   --max-time 20 > /tmp/n8n_code.txt 2>/tmp/n8n_err.txt
                                 CODE=$(cat /tmp/n8n_code.txt)
                                 echo "HTTP $CODE"
-                                # succès si code 2xx
                                 case "$CODE" in 2*) exit 0 ;; *) exit 1 ;; esac
                             '''
                         )
                         if (code == 0) {
                             notified = true
-                            echo 'n8n notifié avec succès'
+                            echo 'n8n notifie avec succes'
                         } else {
-                            echo "Échec tentative ${attempt} (voir /tmp/n8n_err.txt)"
+                            echo "Echec tentative ${attempt}"
                             sleep(time: 5, unit: 'SECONDS')
                         }
                     }
                     if (!notified) {
-                        echo 'ERREUR : n8n injoignable après 3 tentatives. Analyse à relancer manuellement.'
-                        // On marque le build UNSTABLE pour que l'échec de notification soit VISIBLE.
+                        echo 'ERREUR : n8n injoignable apres 3 tentatives.'
                         if (currentBuild.currentResult == 'SUCCESS') {
                             currentBuild.result = 'UNSTABLE'
                         }
                     }
 
                 } catch (ex) {
-                    echo "Reporting final en échec : ${ex.message}"
+                    echo "Reporting final en echec : ${ex.message}"
                 }
             }
 
-            // Nettoie le workspace. REPORT_BASE est dans /shared (hors workspace) : il SURVIT.
             deleteDir()
         }
 
