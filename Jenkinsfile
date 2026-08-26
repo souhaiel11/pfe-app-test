@@ -1,3 +1,14 @@
+// QA-BUILD-132-FINAL-ANALYSIS-HARDENING-R1 §1 : etat mutable CPS-safe pour le
+// contrat producteur (statuts de stage, tests, docker, ceTaskId Sonar). Ces
+// variables vivent en dehors de pipeline{}/environment{} (qui n'est pas
+// mutable en cours d'execution) et sont modifiees depuis des blocs script{}
+// dans chaque stage -- pattern standard Groovy CPS pour de l'etat partage
+// entre stages Declarative.
+def buildStageStatus = [:]
+def dockerInfo = [build_status: 'UNKNOWN', image_tag: null, push_status: 'NOT_ATTEMPTED']
+def sonarInfo  = [ceTaskId: null, analysisId: null]
+def testsInfo  = [status: 'UNKNOWN', total: null, failures: null, skipped: null, coverage: null]
+
 pipeline {
     agent any
 
@@ -90,11 +101,45 @@ pipeline {
         stage('Build') {
             steps {
                 echo '=== STAGE 2: Maven Build (tests skippes) ==='
-                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    sh '''
-                        set -e
-                        mvn clean package -B -DskipTests=true -Djacoco.skip=true
-                    '''
+                script {
+                    // MVN_SKIP_TESTS est la source de verite unique : le flag
+                    // -DskipTests reellement passe ci-dessous, jamais rededuit.
+                    def skipTests = true
+                    buildStageStatus['build'] = 'FAILED'
+                    catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                        sh '''
+                            set -e
+                            mvn clean package -B -DskipTests=true -Djacoco.skip=true
+                        '''
+                        buildStageStatus['build'] = 'SUCCESS'
+                    }
+
+                    if (skipTests) {
+                        // Skip delibere par config pipeline : ne jamais fabriquer
+                        // total=0 comme "tests passed" -- semantique explicite
+                        // SKIPPED, consommee telle quelle par WF1 (mappee vers
+                        // NOT_RUN, jamais PASSED).
+                        testsInfo = [status: 'SKIPPED', total: 0, failures: 0, skipped: 0, coverage: null]
+                    } else {
+                        def sfSummary = sh(
+                            script: "cat target/surefire-reports/*.txt 2>/dev/null | grep 'Tests run:' | tail -1 || true",
+                            returnStdout: true
+                        ).trim()
+                        def m = (sfSummary =~ /Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+),\s*Skipped:\s*(\d+)/)
+                        if (sfSummary && m.find()) {
+                            def total     = m.group(1) as Integer
+                            def failures  = (m.group(2) as Integer) + (m.group(3) as Integer)
+                            def skipped   = m.group(4) as Integer
+                            testsInfo = [
+                                status  : failures > 0 ? 'FAILED' : 'SUCCESS',
+                                total   : total, failures: failures, skipped: skipped, coverage: null
+                            ]
+                        } else {
+                            // Tests censes tourner mais aucun resultat exploitable
+                            // trouve : UNKNOWN honnete, jamais 0/PASSED fabrique.
+                            testsInfo = [status: 'UNKNOWN', total: null, failures: null, skipped: null, coverage: null]
+                        }
+                    }
                 }
             }
         }
@@ -102,9 +147,10 @@ pipeline {
         stage('SonarQube Analysis') {
             steps {
                 echo '=== STAGE 3: SonarQube SAST ==='
-                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    withSonarQubeEnv('sq1') {
-                        script {
+                script {
+                    buildStageStatus['sonar'] = 'FAILED'
+                    catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                        withSonarQubeEnv('sq1') {
                             def prArgs = ''
                             if (env.CHANGE_ID) {
                                 echo "SonarQube : mode Pull Request #${env.CHANGE_ID}"
@@ -123,9 +169,22 @@ pipeline {
                                   -Dsonar.projectName="PFE App Test" \
                                   -Dsonar.host.url="\$SONAR_HOST_URL" \
                                   -Dsonar.token="\$SONAR_TOKEN" \
-                                  ${prArgs}
+                                  ${prArgs} 2>&1 | tee sonar-analysis.log
                             """
                         }
+                        buildStageStatus['sonar'] = 'SUCCESS'
+                    }
+                    // ceTaskId : imprime par le scanner sur stdout
+                    // ("More about the report processing at .../api/ce/task?id=...")
+                    // mais jamais transmis au webhook jusqu'ici -- WF1 ne peut donc
+                    // jamais corriger la quality gate (SONAR_CE_TASK_ID_MISSING).
+                    // Extraction best-effort : n'echoue jamais le stage si absente.
+                    def ceTaskLine = sh(
+                        script: "grep -oE 'ce/task\\?id=[A-Za-z0-9_-]+' sonar-analysis.log 2>/dev/null | tail -1 || true",
+                        returnStdout: true
+                    ).trim()
+                    if (ceTaskLine) {
+                        sonarInfo.ceTaskId = ceTaskLine.replaceFirst(/^ce\/task\?id=/, '')
                     }
                 }
             }
@@ -134,15 +193,24 @@ pipeline {
         stage('Docker Build') {
             steps {
                 echo '=== STAGE 4: Docker Build ==='
-                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    sh '''
-                        set -e
-                        docker build -t "$IMAGE_NAME:$IMAGE_TAG" .
-                        docker tag "$IMAGE_NAME:$IMAGE_TAG" "$IMAGE_NAME:latest"
+                script {
+                    dockerInfo.image_tag = "${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+                    dockerInfo.build_status = 'FAILED'
+                    catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
+                        sh '''
+                            set -e
+                            docker build -t "$IMAGE_NAME:$IMAGE_TAG" .
+                            docker tag "$IMAGE_NAME:$IMAGE_TAG" "$IMAGE_NAME:latest"
 
-                        echo "=== Docker image creee ==="
-                        docker images | grep "$IMAGE_NAME" || true
-                    '''
+                            echo "=== Docker image creee ==="
+                            docker images | grep "$IMAGE_NAME" || true
+                        '''
+                        dockerInfo.build_status = 'SUCCESS'
+                        buildStageStatus['docker'] = 'SUCCESS'
+                    }
+                    // Aucun `docker push` dans ce pipeline -- valeur honnete, jamais
+                    // SUCCESS/UNKNOWN fabrique pour une etape jamais tentee.
+                    dockerInfo.push_status = 'NOT_ATTEMPTED'
                 }
             }
         }
@@ -448,10 +516,6 @@ PY
                               :                             'pipeline_failed'
                     }
 
-                    def severityHint = buildStatus == 'FAILURE'  ? 'HIGH'
-                                     : buildStatus == 'UNSTABLE' ? 'MEDIUM'
-                                     :                             'LOW'
-
                     def branch = env.GIT_BRANCH?.replaceAll('origin/', '') ?: 'main'
                     def commit = env.GIT_COMMIT?.take(8) ?: 'unknown'
 
@@ -459,6 +523,34 @@ PY
                     def trivyAvailable = exists("${env.REPORT_BASE}/trivy-report.json")
                     def zapAvailable   = exists("${env.REPORT_BASE}/zap-report.json")
                     def owaspAvailable = exists("${env.REPORT_BASE}/dependency-check-report.json")
+
+                    // severity_hint : jamais autoritaire (WF1 ignore deja ce champ
+                    // pour son calcul canonique), mais ne doit plus etre trompeur
+                    // pour un lecteur humain du payload brut. Signal scanner reel
+                    // bon marche (grep sur un marqueur texte, pas de re-parsing
+                    // JSON complet -- WF1 fait deja ce travail en detail) : une
+                    // severite CRITICAL Trivy ou un CVSS>=9 OWASP fait remonter
+                    // HIGH meme sur un build Jenkins SUCCESS. Purement informatif,
+                    // n'ecrase jamais les vraies findings.
+                    def trivyPath = "${env.REPORT_BASE}/trivy-report.json"
+                    def owaspLogPath = "${env.REPORT_BASE}/owasp.log"
+                    def criticalTrivy = trivyAvailable &&
+                        sh(script: "grep -q CRITICAL '${trivyPath}'", returnStatus: true) == 0
+                    def criticalOwasp = owaspAvailable &&
+                        sh(script: "grep -qi 'CVSS score greater than or equal to' '${owaspLogPath}'", returnStatus: true) == 0
+
+                    def severityHint = buildStatus == 'FAILURE'         ? 'HIGH'
+                                     : (criticalTrivy || criticalOwasp) ? 'HIGH'
+                                     : buildStatus == 'UNSTABLE'        ? 'MEDIUM'
+                                     :                                    'LOW'
+
+                    buildStageStatus['tests']  = testsInfo.status
+                    buildStageStatus['trivy']  = trivyAvailable ? 'COMPLETED' : 'UNKNOWN'
+                    buildStageStatus['owasp']  = owaspAvailable ? 'COMPLETED' : 'UNKNOWN'
+                    buildStageStatus['zap']    = zapAvailable   ? 'COMPLETED' : 'UNKNOWN'
+                    buildStageStatus['build']  = buildStageStatus['build']  ?: 'UNKNOWN'
+                    buildStageStatus['sonar']  = buildStageStatus['sonar']  ?: 'UNKNOWN'
+                    buildStageStatus['docker'] = dockerInfo.build_status
 
                     def payloadObject = [
                         event         : event,
@@ -471,6 +563,7 @@ PY
                         status        : buildStatus,
                         severity_hint : severityHint,
                         duration_ms   : currentBuild.duration,
+                        buildStageStatus: buildStageStatus,
                         pull_request  : env.CHANGE_ID ? [
                             number: env.CHANGE_ID,
                             branch: env.CHANGE_BRANCH,
@@ -486,11 +579,25 @@ PY
                             owaspPath      : "${env.N8N_REPORT_BASE}/dependency-check-report.json",
                             available      : [ trivy: trivyAvailable, zap: zapAvailable, owasp: owaspAvailable ]
                         ],
+                        tests: [
+                            status  : testsInfo.status,
+                            total   : testsInfo.total,
+                            failures: testsInfo.failures,
+                            skipped : testsInfo.skipped,
+                            coverage: testsInfo.coverage
+                        ],
                         sonar: [
                             project_key  : env.APP_NAME,
-                            dashboard_url: "${env.SONAR_HOST_URL}/dashboard?id=${env.APP_NAME}"
+                            dashboard_url: "${env.SONAR_HOST_URL}/dashboard?id=${env.APP_NAME}",
+                            ceTaskId     : sonarInfo.ceTaskId,
+                            analysisId   : sonarInfo.analysisId
                         ],
-                        docker    : [ image: "${env.IMAGE_NAME}:${env.IMAGE_TAG}" ],
+                        docker: [
+                            image       : "${env.IMAGE_NAME}:${env.IMAGE_TAG}",
+                            build_status: dockerInfo.build_status,
+                            image_tag   : dockerInfo.image_tag,
+                            push_status : dockerInfo.push_status
+                        ],
                         kubernetes: [ namespace: env.K8S_NAMESPACE, target: env.ZAP_TARGET_URL ]
                     ]
 
