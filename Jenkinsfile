@@ -504,148 +504,200 @@ PY
         always {
             echo '=== REPORTING FINAL ==='
             script {
+                // QA-BUILD-133-INFRA-FAILURE-HARDENING-R1 : quand le checkout SCM
+                // echoue (implicite "Declarative: Checkout SCM"), Jenkins libere
+                // le contexte node/workspace AVANT d'executer post{always{}}
+                // ([Pipeline] // node apparait avant [Pipeline] { (Declarative:
+                // Post Actions) dans le log de #133) -- toute operation qui a
+                // besoin de hudson.FilePath (sh, writeFile, deleteDir) y leve
+                // MissingContextVariableException, confirme sur #133. On
+                // reacquiert ici un contexte dedie (2 executeurs configures sur
+                // ce controleur -- voir config.xml -- donc sans risque de
+                // deadlock avec l'executeur deja tenu par le pipeline) afin de
+                // pouvoir a la fois faire le rapport normal (succes) ET notifier
+                // honnetement un echec pre-stage (checkout) sans jamais fabriquer
+                // de resultat de stage ni masquer le vrai statut du pipeline
+                // (currentBuild.result n'est jamais releve ici, seulement degrade
+                // SUCCESS->UNSTABLE en cas d'echec de notification, voir plus bas).
                 try {
-                    def buildStatus = currentBuild.currentResult ?: 'SUCCESS'
+                    timeout(time: 2, unit: 'MINUTES') {
+                        node {
+                            try {
+                                def buildStatus = currentBuild.currentResult ?: 'SUCCESS'
+                                // GIT_COMMIT n'est jamais renseigne si le checkout
+                                // n'a jamais abouti -- signal fiable, jamais fabrique.
+                                def checkoutFailed = !env.GIT_COMMIT
 
-                    def event
-                    if (env.CHANGE_ID) {
-                        event = 'pr_validation'
-                    } else {
-                        event = buildStatus == 'SUCCESS'  ? 'pipeline_success'
-                              : buildStatus == 'UNSTABLE' ? 'pipeline_unstable'
-                              :                             'pipeline_failed'
-                    }
+                                def event
+                                if (env.CHANGE_ID) {
+                                    event = 'pr_validation'
+                                } else {
+                                    event = buildStatus == 'SUCCESS'  ? 'pipeline_success'
+                                          : buildStatus == 'UNSTABLE' ? 'pipeline_unstable'
+                                          :                             'pipeline_failed'
+                                }
 
-                    def branch = env.GIT_BRANCH?.replaceAll('origin/', '') ?: 'main'
-                    def commit = env.GIT_COMMIT?.take(8) ?: 'unknown'
+                                def branch = env.GIT_BRANCH?.replaceAll('origin/', '') ?: 'main'
+                                def commit = env.GIT_COMMIT?.take(8) ?: 'unknown'
 
-                    def exists = { p -> sh(script: "test -s '${p}'", returnStatus: true) == 0 }
-                    def trivyAvailable = exists("${env.REPORT_BASE}/trivy-report.json")
-                    def zapAvailable   = exists("${env.REPORT_BASE}/zap-report.json")
-                    def owaspAvailable = exists("${env.REPORT_BASE}/dependency-check-report.json")
+                                def exists = { p -> p ? (sh(script: "test -s '${p}'", returnStatus: true) == 0) : false }
+                                def trivyAvailable = env.REPORT_BASE ? exists("${env.REPORT_BASE}/trivy-report.json") : false
+                                def zapAvailable   = env.REPORT_BASE ? exists("${env.REPORT_BASE}/zap-report.json") : false
+                                def owaspAvailable = env.REPORT_BASE ? exists("${env.REPORT_BASE}/dependency-check-report.json") : false
 
-                    // severity_hint : jamais autoritaire (WF1 ignore deja ce champ
-                    // pour son calcul canonique), mais ne doit plus etre trompeur
-                    // pour un lecteur humain du payload brut. Signal scanner reel
-                    // bon marche (grep sur un marqueur texte, pas de re-parsing
-                    // JSON complet -- WF1 fait deja ce travail en detail) : une
-                    // severite CRITICAL Trivy ou un CVSS>=9 OWASP fait remonter
-                    // HIGH meme sur un build Jenkins SUCCESS. Purement informatif,
-                    // n'ecrase jamais les vraies findings.
-                    def trivyPath = "${env.REPORT_BASE}/trivy-report.json"
-                    def owaspLogPath = "${env.REPORT_BASE}/owasp.log"
-                    def criticalTrivy = trivyAvailable &&
-                        sh(script: "grep -q CRITICAL '${trivyPath}'", returnStatus: true) == 0
-                    def criticalOwasp = owaspAvailable &&
-                        sh(script: "grep -qi 'CVSS score greater than or equal to' '${owaspLogPath}'", returnStatus: true) == 0
+                                // severity_hint : jamais autoritaire (WF1 ignore deja ce champ
+                                // pour son calcul canonique), mais ne doit plus etre trompeur
+                                // pour un lecteur humain du payload brut. Signal scanner reel
+                                // bon marche (grep sur un marqueur texte, pas de re-parsing
+                                // JSON complet -- WF1 fait deja ce travail en detail) : une
+                                // severite CRITICAL Trivy ou un CVSS>=9 OWASP fait remonter
+                                // HIGH meme sur un build Jenkins SUCCESS. Purement informatif,
+                                // n'ecrase jamais les vraies findings.
+                                def criticalTrivy = trivyAvailable &&
+                                    sh(script: "grep -q CRITICAL '${env.REPORT_BASE}/trivy-report.json'", returnStatus: true) == 0
+                                def criticalOwasp = owaspAvailable &&
+                                    sh(script: "grep -qi 'CVSS score greater than or equal to' '${env.REPORT_BASE}/owasp.log'", returnStatus: true) == 0
 
-                    def severityHint = buildStatus == 'FAILURE'         ? 'HIGH'
-                                     : (criticalTrivy || criticalOwasp) ? 'HIGH'
-                                     : buildStatus == 'UNSTABLE'        ? 'MEDIUM'
-                                     :                                    'LOW'
+                                def severityHint = buildStatus == 'FAILURE'         ? 'HIGH'
+                                                 : (criticalTrivy || criticalOwasp) ? 'HIGH'
+                                                 : buildStatus == 'UNSTABLE'        ? 'MEDIUM'
+                                                 :                                    'LOW'
 
-                    buildStageStatus['tests']  = testsInfo.status
-                    buildStageStatus['trivy']  = trivyAvailable ? 'COMPLETED' : 'UNKNOWN'
-                    buildStageStatus['owasp']  = owaspAvailable ? 'COMPLETED' : 'UNKNOWN'
-                    buildStageStatus['zap']    = zapAvailable   ? 'COMPLETED' : 'UNKNOWN'
-                    buildStageStatus['build']  = buildStageStatus['build']  ?: 'UNKNOWN'
-                    buildStageStatus['sonar']  = buildStageStatus['sonar']  ?: 'UNKNOWN'
-                    buildStageStatus['docker'] = dockerInfo.build_status
+                                def technicalFailure = null
+                                if (checkoutFailed) {
+                                    // Rien au-dela du checkout n'a ete tente -- NOT_REACHED
+                                    // partout, jamais UNKNOWN (qui ailleurs signifie "vieux
+                                    // Jenkinsfile n'envoyant pas ce champ") ni un statut
+                                    // fabrique. Ecrase les valeurs par defaut des stages
+                                    // qui n'ont jamais eu la main.
+                                    buildStageStatus = [
+                                        'build':'NOT_REACHED', 'tests':'NOT_REACHED', 'sonar':'NOT_REACHED',
+                                        'trivy':'NOT_REACHED', 'owasp':'NOT_REACHED', 'zap':'NOT_REACHED', 'docker':'NOT_REACHED'
+                                    ]
+                                    testsInfo = [status: 'NOT_REACHED', total: null, failures: null, skipped: null, coverage: null]
+                                    dockerInfo.build_status = 'NOT_REACHED'
+                                    technicalFailure = [
+                                        phase        : 'SCM_CHECKOUT',
+                                        problemClass : 'TECHNICAL_BLOCKER',
+                                        technicalCode: 'SCM_CHECKOUT_NETWORK_FAILURE',
+                                        message      : 'Git checkout did not complete -- see Jenkins console for the underlying git/network error.'
+                                    ]
+                                } else {
+                                    buildStageStatus['tests']  = testsInfo.status
+                                    buildStageStatus['trivy']  = trivyAvailable ? 'COMPLETED' : 'UNKNOWN'
+                                    buildStageStatus['owasp']  = owaspAvailable ? 'COMPLETED' : 'UNKNOWN'
+                                    buildStageStatus['zap']    = zapAvailable   ? 'COMPLETED' : 'UNKNOWN'
+                                    buildStageStatus['build']  = buildStageStatus['build']  ?: 'UNKNOWN'
+                                    buildStageStatus['sonar']  = buildStageStatus['sonar']  ?: 'UNKNOWN'
+                                    buildStageStatus['docker'] = dockerInfo.build_status
+                                }
 
-                    def payloadObject = [
-                        event         : event,
-                        job           : env.JOB_NAME,
-                        build_number  : env.BUILD_NUMBER,
-                        build_url     : env.BUILD_URL,
-                        logs_url      : "${env.BUILD_URL}consoleText",
-                        branch        : branch,
-                        commit        : commit,
-                        status        : buildStatus,
-                        severity_hint : severityHint,
-                        duration_ms   : currentBuild.duration,
-                        buildStageStatus: buildStageStatus,
-                        pull_request  : env.CHANGE_ID ? [
-                            number: env.CHANGE_ID,
-                            branch: env.CHANGE_BRANCH,
-                            target: env.CHANGE_TARGET,
-                            url   : env.CHANGE_URL,
-                            title : env.CHANGE_TITLE
-                        ] : null,
-                        reports: [
-                            jenkinsBasePath: env.REPORT_BASE,
-                            basePath       : env.N8N_REPORT_BASE,
-                            trivyPath      : "${env.N8N_REPORT_BASE}/trivy-report.json",
-                            zapPath        : "${env.N8N_REPORT_BASE}/zap-report.json",
-                            owaspPath      : "${env.N8N_REPORT_BASE}/dependency-check-report.json",
-                            available      : [ trivy: trivyAvailable, zap: zapAvailable, owasp: owaspAvailable ]
-                        ],
-                        tests: [
-                            status  : testsInfo.status,
-                            total   : testsInfo.total,
-                            failures: testsInfo.failures,
-                            skipped : testsInfo.skipped,
-                            coverage: testsInfo.coverage
-                        ],
-                        sonar: [
-                            project_key  : env.APP_NAME,
-                            dashboard_url: "${env.SONAR_HOST_URL}/dashboard?id=${env.APP_NAME}",
-                            ceTaskId     : sonarInfo.ceTaskId,
-                            analysisId   : sonarInfo.analysisId
-                        ],
-                        docker: [
-                            image       : "${env.IMAGE_NAME}:${env.IMAGE_TAG}",
-                            build_status: dockerInfo.build_status,
-                            image_tag   : dockerInfo.image_tag,
-                            push_status : dockerInfo.push_status
-                        ],
-                        kubernetes: [ namespace: env.K8S_NAMESPACE, target: env.ZAP_TARGET_URL ]
-                    ]
+                                def payloadObject = [
+                                    event           : event,
+                                    job             : env.JOB_NAME,
+                                    build_number    : env.BUILD_NUMBER,
+                                    build_url       : env.BUILD_URL,
+                                    logs_url        : "${env.BUILD_URL}consoleText",
+                                    branch          : branch,
+                                    commit          : commit,
+                                    status          : buildStatus,
+                                    severity_hint   : severityHint,
+                                    duration_ms     : currentBuild.duration,
+                                    buildStageStatus: buildStageStatus,
+                                    technicalFailure: technicalFailure,
+                                    pull_request    : env.CHANGE_ID ? [
+                                        number: env.CHANGE_ID,
+                                        branch: env.CHANGE_BRANCH,
+                                        target: env.CHANGE_TARGET,
+                                        url   : env.CHANGE_URL,
+                                        title : env.CHANGE_TITLE
+                                    ] : null,
+                                    reports: [
+                                        jenkinsBasePath: env.REPORT_BASE,
+                                        basePath       : env.N8N_REPORT_BASE,
+                                        trivyPath      : "${env.N8N_REPORT_BASE}/trivy-report.json",
+                                        zapPath        : "${env.N8N_REPORT_BASE}/zap-report.json",
+                                        owaspPath      : "${env.N8N_REPORT_BASE}/dependency-check-report.json",
+                                        available      : [ trivy: trivyAvailable, zap: zapAvailable, owasp: owaspAvailable ]
+                                    ],
+                                    tests: [
+                                        status  : testsInfo.status,
+                                        total   : testsInfo.total,
+                                        failures: testsInfo.failures,
+                                        skipped : testsInfo.skipped,
+                                        coverage: testsInfo.coverage
+                                    ],
+                                    sonar: [
+                                        project_key  : env.APP_NAME,
+                                        dashboard_url: "${env.SONAR_HOST_URL}/dashboard?id=${env.APP_NAME}",
+                                        ceTaskId     : sonarInfo.ceTaskId,
+                                        analysisId   : sonarInfo.analysisId
+                                    ],
+                                    docker: [
+                                        image       : env.IMAGE_TAG ? "${env.IMAGE_NAME}:${env.IMAGE_TAG}" : null,
+                                        build_status: dockerInfo.build_status,
+                                        image_tag   : dockerInfo.image_tag,
+                                        push_status : dockerInfo.push_status
+                                    ],
+                                    kubernetes: [ namespace: env.K8S_NAMESPACE, target: env.ZAP_TARGET_URL ]
+                                ]
 
-                    def payload = groovy.json.JsonOutput.prettyPrint(
-                        groovy.json.JsonOutput.toJson(payloadObject)
-                    )
-                    writeFile file: 'jenkins-webhook-payload.json', text: payload
+                                def payload = groovy.json.JsonOutput.prettyPrint(
+                                    groovy.json.JsonOutput.toJson(payloadObject)
+                                )
+                                writeFile file: 'jenkins-webhook-payload.json', text: payload
 
-                    sh 'mkdir -p "$REPORT_BASE" && cp jenkins-webhook-payload.json "$REPORT_BASE/payload.json" || true'
+                                if (env.REPORT_BASE) {
+                                    sh 'mkdir -p "$REPORT_BASE" && cp jenkins-webhook-payload.json "$REPORT_BASE/payload.json" || true'
+                                }
 
-                    def notified = false
-                    for (int attempt = 1; attempt <= 3 && !notified; attempt++) {
-                        echo "Notification n8n : tentative ${attempt}/3"
-                        def code = sh(
-                            returnStatus: true,
-                            script: '''
-                                curl -sS -o /tmp/n8n_resp.txt -w "%{http_code}" \
-                                  -X POST "$N8N_WEBHOOK_URL" \
-                                  -H "Content-Type: application/json" \
-                                  -H "X-API-Key: $N8N_API_KEY" \
-                                  --data-binary @jenkins-webhook-payload.json \
-                                  --max-time 20 > /tmp/n8n_code.txt 2>/tmp/n8n_err.txt
-                                CODE=$(cat /tmp/n8n_code.txt)
-                                echo "HTTP $CODE"
-                                case "$CODE" in 2*) exit 0 ;; *) exit 1 ;; esac
-                            '''
-                        )
-                        if (code == 0) {
-                            notified = true
-                            echo 'n8n notifie avec succes'
-                        } else {
-                            echo "Echec tentative ${attempt}"
-                            sleep(time: 5, unit: 'SECONDS')
+                                def notified = false
+                                for (int attempt = 1; attempt <= 3 && !notified; attempt++) {
+                                    echo "Notification n8n : tentative ${attempt}/3"
+                                    def code = sh(
+                                        returnStatus: true,
+                                        script: '''
+                                            curl -sS -o /tmp/n8n_resp.txt -w "%{http_code}" \
+                                              -X POST "$N8N_WEBHOOK_URL" \
+                                              -H "Content-Type: application/json" \
+                                              -H "X-API-Key: $N8N_API_KEY" \
+                                              --data-binary @jenkins-webhook-payload.json \
+                                              --max-time 20 > /tmp/n8n_code.txt 2>/tmp/n8n_err.txt
+                                            CODE=$(cat /tmp/n8n_code.txt)
+                                            echo "HTTP $CODE"
+                                            case "$CODE" in 2*) exit 0 ;; *) exit 1 ;; esac
+                                        '''
+                                    )
+                                    if (code == 0) {
+                                        notified = true
+                                        echo 'n8n notifie avec succes'
+                                    } else {
+                                        echo "Echec tentative ${attempt}"
+                                        sleep(time: 5, unit: 'SECONDS')
+                                    }
+                                }
+                                if (!notified) {
+                                    echo 'ERREUR : n8n injoignable apres 3 tentatives.'
+                                    if (currentBuild.currentResult == 'SUCCESS') {
+                                        currentBuild.result = 'UNSTABLE'
+                                    }
+                                }
+                            } finally {
+                                try {
+                                    deleteDir()
+                                } catch (cleanupEx) {
+                                    echo "Nettoyage workspace ignore (non fatal) : ${cleanupEx.message}"
+                                }
+                            }
                         }
                     }
-                    if (!notified) {
-                        echo 'ERREUR : n8n injoignable apres 3 tentatives.'
-                        if (currentBuild.currentResult == 'SUCCESS') {
-                            currentBuild.result = 'UNSTABLE'
-                        }
-                    }
-
                 } catch (ex) {
-                    echo "Reporting final en echec : ${ex.message}"
+                    // Contexte node/workspace inacquerable (agent indisponible) ou
+                    // timeout -- rapport/notification ignores, mais JAMAIS le
+                    // resultat original du pipeline, deja fixe par l'echec reel.
+                    echo "Workspace unavailable after pre-stage failure; reporting/cleanup skipped (non fatal) : ${ex.message}"
                 }
             }
-
-            deleteDir()
         }
 
         success  { echo 'Pipeline SUCCESS' }
