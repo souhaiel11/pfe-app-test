@@ -45,14 +45,12 @@ public class TaskService {
     private String adminPassword;
 
     private final TaskRepository taskRepository;
-    private final UserRepository userRepository;
 
     @PersistenceContext
     private EntityManager entityManager;
 
     public TaskService(TaskRepository taskRepository, UserRepository userRepository) {
         this.taskRepository = taskRepository;
-        this.userRepository = userRepository;
     }
 
     // ============================================================
