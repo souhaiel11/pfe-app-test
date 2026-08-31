@@ -45,11 +45,6 @@ public class SecurityConfig {
             .sessionManagement()
                 .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
             .and()
-            // VULNERABILITY Z2, Z3, Z5 — headers de sécurité ABSENTS
-            // Pas de .headers().contentTypeOptions()
-            // Pas de .headers().frameOptions()
-            // Pas de Content-Security-Policy
-            // .headers() n'est pas configuré du tout
             .addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class);
 
         // Autoriser H2 console dans les frames (vulnérabilité XSS/clickjacking)
