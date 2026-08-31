@@ -3,7 +3,6 @@ package com.pfe.devsecops.service;
 import com.pfe.devsecops.model.Task;
 import com.pfe.devsecops.model.User;
 import com.pfe.devsecops.repository.TaskRepository;
-import com.pfe.devsecops.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -49,7 +48,7 @@ public class TaskService {
     @PersistenceContext
     private EntityManager entityManager;
 
-    public TaskService(TaskRepository taskRepository, UserRepository userRepository) {
+    public TaskService(TaskRepository taskRepository) {
         this.taskRepository = taskRepository;
     }
 
