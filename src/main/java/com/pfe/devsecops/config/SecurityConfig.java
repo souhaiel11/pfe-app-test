@@ -37,7 +37,7 @@ public class SecurityConfig {
             .authorizeRequests()
                 .antMatchers("/api/auth/**").permitAll()
                 .antMatchers("/h2-console/**").permitAll()
-                // VULNERABILITY Z4 — pas de restriction sur /api/tasks/{id}
+                // VULNERABILITY Z4 — pas de restriction sur /api/tasks selon l'identifiant de la tâche
                 // N'importe quel user authentifié peut accéder aux tâches des autres
                 .antMatchers("/api/**").authenticated()
                 .anyRequest().authenticated()
