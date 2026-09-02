@@ -97,9 +97,18 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Pinned to match the intentionally-vulnerable spring-security-core
+             version above (5.6.4, CVE-2023-20860, left untouched: this is a
+             deliberate demo vulnerability). Without this, spring-security-test
+             resolves to Spring Boot 2.7.0's newer managed Spring Security
+             version and fails at runtime with NoSuchMethodError on APIs (e.g.
+             UsernamePasswordAuthenticationToken.authenticated(...)) that only
+             exist in that newer, non-pinned line: a test-classpath-only
+             binary mismatch, never shipped in the production artifact. -->
         <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-test</artifactId>
+            <version>5.6.4</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

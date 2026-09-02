@@ -10,6 +10,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Arrays;
 import java.util.List;
@@ -103,8 +104,15 @@ class TaskServiceTest {
     }
 
     // ✅ Test 6 — passe
+    // validateAdmin() lit adminUsername/adminPassword via @Value (config
+    // Spring), jamais renseignés par Mockito @InjectMocks (qui ne traite pas
+    // les annotations @Value). Le test doit fournir explicitement les valeurs
+    // qu'un vrai contexte Spring injecterait, sinon les deux champs restent
+    // null et validateAdmin échoue systématiquement, quel que soit l'appelant.
     @Test
     void testValidateAdmin_WithCorrectCredentials_ReturnsTrue() {
+        ReflectionTestUtils.setField(taskService, "adminUsername", "admin");
+        ReflectionTestUtils.setField(taskService, "adminPassword", "admin123");
         boolean result = taskService.validateAdmin("admin", "admin123");
         assertTrue(result);
     }
@@ -123,16 +131,19 @@ class TaskServiceTest {
         assertEquals("ERROR: task is null", result);
     }
 
-    // ❌ Test 9 — ÉCHOUE INTENTIONNELLEMENT (J1)
-    // deleteTask retourne true quand la tâche existe, mais on assert false → FAIL
+    // ✅ Test 9 — deleteTask retourne true quand la tâche existe et est
+    // supprimée. Anciennement une échec intentionnelle de démo (J1) qui
+    // assertait le contraire du contrat réel ; converti en test de
+    // régression légitime pour ce même contrat (miroir du Test 10 ci-dessous
+    // pour le cas "tâche absente").
     @Test
-    void testDeleteTask_WhenExists_ShouldFail() {
+    void testDeleteTask_WhenExists_ReturnsTrue() {
         when(taskRepository.existsById(1L)).thenReturn(true);
         doNothing().when(taskRepository).deleteById(1L);
 
         boolean result = taskService.deleteTask(1L);
-        // INTENTIONNELLEMENT FAUX : deleteTask retourne true, on attend false → test FAIL
-        assertEquals(false, result, "This test is intentionally failing for DevSecOps demo");
+        assertTrue(result, "deleteTask should return true when the task exists and was deleted");
+        verify(taskRepository, times(1)).deleteById(1L);
     }
 
     // ✅ Test 10 — passe

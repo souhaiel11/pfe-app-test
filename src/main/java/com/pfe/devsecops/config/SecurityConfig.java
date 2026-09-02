@@ -37,7 +37,7 @@ public class SecurityConfig {
             .authorizeRequests()
                 .antMatchers("/api/auth/**").permitAll()
                 .antMatchers("/h2-console/**").permitAll()
-                // VULNERABILITY Z4 — pas de restriction sur /api/tasks/{id}
+                // VULNERABILITY Z4 — pas de restriction sur /api/tasks selon l'identifiant de la tâche
                 // N'importe quel user authentifié peut accéder aux tâches des autres
                 .antMatchers("/api/**").authenticated()
                 .anyRequest().authenticated()
@@ -45,11 +45,6 @@ public class SecurityConfig {
             .sessionManagement()
                 .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
             .and()
-            // VULNERABILITY Z2, Z3, Z5 — headers de sécurité ABSENTS
-            // Pas de .headers().contentTypeOptions()
-            // Pas de .headers().frameOptions()
-            // Pas de Content-Security-Policy
-            // .headers() n'est pas configuré du tout
             .addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class);
 
         // Autoriser H2 console dans les frames (vulnérabilité XSS/clickjacking)
