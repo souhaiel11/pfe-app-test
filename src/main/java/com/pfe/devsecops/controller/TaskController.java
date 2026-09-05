@@ -9,6 +9,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/tasks")
@@ -18,18 +19,22 @@ public class TaskController {
     private TaskService taskService;
 
     @GetMapping
-    public ResponseEntity<List<Task>> getAllTasks() {
-        return ResponseEntity.ok(taskService.getAllTasks());
+    public ResponseEntity<List<TaskDTO>> getAllTasks() {
+        List<TaskDTO> taskDTOs = taskService.getAllTasks().stream()
+                .map(this::convertToDto)
+                .collect(Collectors.toList());
+        return ResponseEntity.ok(taskDTOs);
     }
 
     // VULNERABILITY Z4 — IDOR : pas de vérification ownership
     // N'importe quel user authentifié peut voir la tâche de n'importe qui
     // en changeant l'id dans l'URL
     @GetMapping("/{id}")
-    public ResponseEntity<Task> getTaskById(@PathVariable Long id) {
+    public ResponseEntity<TaskDTO> getTaskById(@PathVariable Long id) {
         // MANQUE : vérification que l'user courant est le propriétaire de la tâche
         // Correct : if (!task.getUser().getId().equals(currentUser.getId())) throw 403
         return taskService.getTaskById(id)
+                .map(this::convertToDto)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
