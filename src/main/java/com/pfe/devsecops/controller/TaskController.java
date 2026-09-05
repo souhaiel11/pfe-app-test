@@ -61,9 +61,12 @@ public class TaskController {
 
     // VULNERABILITY S1 — endpoint qui expose la SQL injection
     @GetMapping("/search")
-    public ResponseEntity<List<Task>> searchTasks(@RequestParam String title) {
+    public ResponseEntity<List<TaskDTO>> searchTasks(@RequestParam String title) {
         // title est passé directement sans sanitization → SQL injection
-        return ResponseEntity.ok(taskService.searchTasksByTitle(title));
+        List<TaskDTO> taskDTOs = taskService.searchTasksByTitle(title).stream()
+                .map(this::convertToDto)
+                .collect(Collectors.toList());
+        return ResponseEntity.ok(taskDTOs);
     }
 
     @PostMapping("/{id}/process")
