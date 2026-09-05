@@ -49,6 +49,26 @@ public class TaskDTO {
         return dto;
     }
 
+    /**
+     * Maps this {@link TaskDTO} into a new {@link Task} entity instance so
+     * that controllers can accept the API-facing DTO while still delegating
+     * persistence-related work to the service layer using the entity type.
+     * The identifier is intentionally copied as-is; callers responsible for
+     * update flows should overwrite it with the path-resolved identifier
+     * before invoking the service layer where applicable.
+     *
+     * @return a new Task entity populated from this DTO's fields
+     */
+    public Task toEntity() {
+        Task task = new Task();
+        task.setId(this.id);
+        task.setTitle(this.title);
+        task.setDescription(this.description);
+        task.setStatus(this.status);
+        task.setDueDate(this.dueDate);
+        return task;
+    }
+
     public Long getId() {
         return id;
     }
