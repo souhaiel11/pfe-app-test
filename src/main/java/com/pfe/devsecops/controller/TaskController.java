@@ -87,7 +87,10 @@ public class TaskController {
      */
     private Task convertToEntity(TaskDTO taskDTO) {
         Task task = new Task();
-        BeanUtils.copyProperties(taskDTO, task);
+        BeanUtils.copyProperties(taskDTO, task, "status");
+        if (taskDTO.getStatus() != null) {
+            task.setStatus(Task.TaskStatus.valueOf(taskDTO.getStatus().trim()));
+        }
         return task;
     }
 
@@ -97,7 +100,8 @@ public class TaskController {
      */
     private TaskDTO convertToDto(Task task) {
         TaskDTO taskDTO = new TaskDTO();
-        BeanUtils.copyProperties(task, taskDTO);
+        BeanUtils.copyProperties(task, taskDTO, "status");
+        taskDTO.setStatus(task.getStatus() != null ? task.getStatus().name() : null);
         return taskDTO;
     }
 }

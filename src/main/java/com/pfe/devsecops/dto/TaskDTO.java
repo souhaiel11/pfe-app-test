@@ -2,8 +2,6 @@ package com.pfe.devsecops.dto;
 
 import com.pfe.devsecops.model.Task;
 
-import java.time.LocalDate;
-
 /**
  * Plain data transfer object representing a Task resource exposed through the
  * REST API. This class intentionally contains no JPA annotations and no
@@ -16,17 +14,15 @@ public class TaskDTO {
     private String title;
     private String description;
     private String status;
-    private LocalDate dueDate;
 
     public TaskDTO() {
     }
 
-    public TaskDTO(Long id, String title, String description, String status, LocalDate dueDate) {
+    public TaskDTO(Long id, String title, String description, String status) {
         this.id = id;
         this.title = title;
         this.description = description;
         this.status = status;
-        this.dueDate = dueDate;
     }
 
     /**
@@ -44,8 +40,7 @@ public class TaskDTO {
         dto.setId(task.getId());
         dto.setTitle(task.getTitle());
         dto.setDescription(task.getDescription());
-        dto.setStatus(task.getStatus());
-        dto.setDueDate(task.getDueDate());
+        dto.setStatus(task.getStatus() != null ? task.getStatus().name() : null);
         return dto;
     }
 
@@ -64,8 +59,9 @@ public class TaskDTO {
         task.setId(this.id);
         task.setTitle(this.title);
         task.setDescription(this.description);
-        task.setStatus(this.status);
-        task.setDueDate(this.dueDate);
+        if (this.status != null) {
+            task.setStatus(Task.TaskStatus.valueOf(this.status.trim()));
+        }
         return task;
     }
 
@@ -99,13 +95,5 @@ public class TaskDTO {
 
     public void setStatus(String status) {
         this.status = status;
-    }
-
-    public LocalDate getDueDate() {
-        return dueDate;
-    }
-
-    public void setDueDate(LocalDate dueDate) {
-        this.dueDate = dueDate;
     }
 }
