@@ -20,13 +20,8 @@ public class TaskController {
         return ResponseEntity.ok(taskService.getAllTasks());
     }
 
-    // VULNERABILITY Z4 — IDOR : pas de vérification ownership
-    // N'importe quel user authentifié peut voir la tâche de n'importe qui
-    // en changeant l'id dans l'URL
     @GetMapping("/{id}")
     public ResponseEntity<Task> getTaskById(@PathVariable Long id) {
-        // MANQUE : vérification que l'user courant est le propriétaire de la tâche
-        // Correct : if (!task.getUser().getId().equals(currentUser.getId())) throw 403
         return taskService.getTaskById(id)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
@@ -48,10 +43,8 @@ public class TaskController {
         return ResponseEntity.noContent().build();
     }
 
-    // VULNERABILITY S1 — endpoint qui expose la SQL injection
     @GetMapping("/search")
     public ResponseEntity<List<Task>> searchTasks(@RequestParam String title) {
-        // title est passé directement sans sanitization → SQL injection
         return ResponseEntity.ok(taskService.searchTasksByTitle(title));
     }
 
