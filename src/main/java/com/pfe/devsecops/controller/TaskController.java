@@ -25,8 +25,7 @@ public class TaskController {
     // en changeant l'id dans l'URL
     @GetMapping("/{id}")
     public ResponseEntity<Task> getTaskById(@PathVariable Long id) {
-        // MANQUE : vérification que l'user courant est le propriétaire de la tâche
-        // Correct : if (!task.getUser().getId().equals(currentUser.getId())) throw 403
+        // Note : la vérification que l'utilisateur courant est bien le propriétaire de la tâche est absente ici.
         return taskService.getTaskById(id)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
