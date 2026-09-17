@@ -73,6 +73,8 @@ public class TaskService {
         return taskRepository.save(task);
     }
 
+    // Note: the existing Task.user association is intentionally left untouched here;
+    // an update never reassigns or clears the owning User.
     public Task updateTask(Long id, Task updatedTask) {
         Task existing = taskRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Task not found: " + id));
