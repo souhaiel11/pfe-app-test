@@ -1,12 +1,16 @@
 package com.pfe.devsecops.service;
 
+import com.pfe.devsecops.dto.TaskDTO;
 import com.pfe.devsecops.model.Task;
 import com.pfe.devsecops.model.User;
 import com.pfe.devsecops.repository.TaskRepository;
+import com.pfe.devsecops.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import javax.persistence.EntityManager;
 import javax.persistence.PersistenceContext;
@@ -45,11 +49,14 @@ public class TaskService {
 
     private final TaskRepository taskRepository;
 
+    private final UserRepository userRepository;
+
     @PersistenceContext
     private EntityManager entityManager;
 
-    public TaskService(TaskRepository taskRepository) {
+    public TaskService(TaskRepository taskRepository, UserRepository userRepository) {
         this.taskRepository = taskRepository;
+        this.userRepository = userRepository;
     }
 
     // ============================================================
@@ -73,6 +80,26 @@ public class TaskService {
         return taskRepository.save(task);
     }
 
+    // ============================================================
+    // DTO-based create : le contrat HTTP n'expose plus l'entité JPA
+    // ============================================================
+    public TaskDTO createTask(TaskDTO taskDto) {
+        Task task = new Task();
+        task.setTitle(taskDto.getTitle());
+        task.setDescription(taskDto.getDescription());
+        task.setPriority(taskDto.getPriority());
+        if (taskDto.getStatus() != null) {
+            task.setStatus(parseStatus(taskDto.getStatus()));
+        }
+        if (taskDto.getUserId() != null) {
+            User owner = userRepository.findById(taskDto.getUserId())
+                    .orElseThrow(() -> new RuntimeException("User not found: " + taskDto.getUserId()));
+            task.setUser(owner);
+        }
+        task.setCreatedAt(LocalDateTime.now());
+        return toDto(taskRepository.save(task));
+    }
+
     public Task updateTask(Long id, Task updatedTask) {
         Task existing = taskRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Task not found: " + id));
@@ -82,6 +109,44 @@ public class TaskService {
         existing.setPriority(updatedTask.getPriority());
         existing.setUpdatedAt(LocalDateTime.now());
         return taskRepository.save(existing);
+    }
+
+    // ============================================================
+    // DTO-based update : la relation user existante reste inchangée
+    // ============================================================
+    public TaskDTO updateTask(Long id, TaskDTO updatedTask) {
+        Task existing = taskRepository.findById(id)
+                .orElseThrow(() -> new RuntimeException("Task not found: " + id));
+        existing.setTitle(updatedTask.getTitle());
+        existing.setDescription(updatedTask.getDescription());
+        existing.setStatus(parseStatus(updatedTask.getStatus()));
+        existing.setPriority(updatedTask.getPriority());
+        existing.setUpdatedAt(LocalDateTime.now());
+        return toDto(taskRepository.save(existing));
+    }
+
+    private Task.TaskStatus parseStatus(String status) {
+        if (status == null) {
+            return null;
+        }
+        try {
+            return Task.TaskStatus.valueOf(status);
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid task status: " + status, e);
+        }
+    }
+
+    private TaskDTO toDto(Task task) {
+        TaskDTO dto = new TaskDTO();
+        dto.setId(task.getId());
+        dto.setTitle(task.getTitle());
+        dto.setDescription(task.getDescription());
+        dto.setStatus(task.getStatus() == null ? null : task.getStatus().name());
+        dto.setPriority(task.getPriority());
+        dto.setCreatedAt(task.getCreatedAt());
+        dto.setUpdatedAt(task.getUpdatedAt());
+        dto.setUserId(task.getUser() == null ? null : task.getUser().getId());
+        return dto;
     }
 
     public boolean deleteTask(Long id) {
