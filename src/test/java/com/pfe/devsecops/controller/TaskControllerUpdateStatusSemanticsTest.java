@@ -80,7 +80,7 @@ class TaskControllerUpdateStatusSemanticsTest {
 
     // A. ABSENT
     @Test
-    void updateTask_absentStatus_resetsToBaselineDefault_TODO() throws Exception {
+    void semantic_v1__DEFAULT_VALUE_SEMANTICS_DEFECT__Task__status__TaskDTO__status__case_ABSENT__resetsToBaselineDefault() throws Exception {
         String json = "{\"title\":\"t2\",\"description\":\"d2\",\"priority\":7}";
         mockMvc.perform(put("/api/tasks/1").contentType(MediaType.APPLICATION_JSON).content(json))
                 .andExpect(status().isOk());
@@ -90,7 +90,7 @@ class TaskControllerUpdateStatusSemanticsTest {
 
     // B. EXPLICIT NULL
     @Test
-    void updateTask_explicitNullStatus_setsNull() throws Exception {
+    void semantic_v1__DEFAULT_VALUE_SEMANTICS_DEFECT__Task__status__TaskDTO__status__case_EXPLICIT_NULL__setsNull() throws Exception {
         String json = "{\"title\":\"t2\",\"description\":\"d2\",\"priority\":7,\"status\":null}";
         mockMvc.perform(put("/api/tasks/1").contentType(MediaType.APPLICATION_JSON).content(json))
                 .andExpect(status().isOk());
@@ -99,7 +99,7 @@ class TaskControllerUpdateStatusSemanticsTest {
 
     // C. VALID
     @Test
-    void updateTask_validStatus_isPersisted() throws Exception {
+    void semantic_v1__DEFAULT_VALUE_SEMANTICS_DEFECT__Task__status__TaskDTO__status__case_EXPLICIT_VALUE__isPersisted() throws Exception {
         String json = "{\"title\":\"t2\",\"description\":\"d2\",\"priority\":7,\"status\":\"DONE\"}";
         mockMvc.perform(put("/api/tasks/1").contentType(MediaType.APPLICATION_JSON).content(json))
                 .andExpect(status().isOk());
@@ -108,7 +108,7 @@ class TaskControllerUpdateStatusSemanticsTest {
 
     // D. INVALID
     @Test
-    void updateTask_invalidStatus_isRejectedAndPersistsNothing() throws Exception {
+    void semantic_v1__DEFAULT_VALUE_SEMANTICS_DEFECT__Task__status__TaskDTO__status__case_INVALID_VALUE__isRejected() throws Exception {
         String json = "{\"title\":\"t2\",\"description\":\"d2\",\"priority\":7,\"status\":\"BOGUS\"}";
         MvcResult result = mockMvc.perform(put("/api/tasks/1").contentType(MediaType.APPLICATION_JSON).content(json))
                 .andReturn();
