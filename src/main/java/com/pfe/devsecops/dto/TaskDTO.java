@@ -1,5 +1,7 @@
 package com.pfe.devsecops.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import java.time.LocalDateTime;
 
 /**
@@ -10,6 +12,10 @@ import java.time.LocalDateTime;
  * String whose accepted values are TODO, IN_PROGRESS, DONE and CANCELLED;
  * the service layer performs the explicit, type-safe conversion to and from
  * the persistent status representation.</p>
+ *
+ * <p>The status field additionally tracks whether it was actually present in
+ * the incoming payload, so the service layer can distinguish an omitted
+ * status (leave the current value untouched) from an explicit null status.</p>
  */
 public class TaskDTO {
 
@@ -21,6 +27,12 @@ public class TaskDTO {
 
     /** Task status name: TODO, IN_PROGRESS, DONE or CANCELLED. */
     private String status;
+
+    /**
+     * True only when the status property was explicitly supplied (the setter is
+     * not invoked by the JSON binder for an absent property). Never serialized.
+     */
+    private boolean statusPresent;
 
     private Integer priority;
 
@@ -46,6 +58,7 @@ public class TaskDTO {
         this.title = title;
         this.description = description;
         this.status = status;
+        this.statusPresent = true;
         this.priority = priority;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
@@ -82,6 +95,15 @@ public class TaskDTO {
 
     public void setStatus(String status) {
         this.status = status;
+        this.statusPresent = true;
+    }
+
+    /**
+     * @return true when the status property was explicitly provided by the caller.
+     */
+    @JsonIgnore
+    public boolean isStatusPresent() {
+        return statusPresent;
     }
 
     public Integer getPriority() {
