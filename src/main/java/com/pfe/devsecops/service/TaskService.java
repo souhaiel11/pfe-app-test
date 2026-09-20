@@ -113,13 +113,20 @@ public class TaskService {
 
     // ============================================================
     // DTO-based update : la relation user existante reste inchangée
+    // Le statut n'est modifié que si la propriété 'status' est
+    // réellement présente dans la charge utile JSON :
+    //  - absente        -> statut courant conservé
+    //  - null explicite -> statut mis à null
+    //  - valeur         -> conversion explicite (400 si invalide)
     // ============================================================
     public TaskDTO updateTask(Long id, TaskDTO updatedTask) {
         Task existing = taskRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Task not found: " + id));
         existing.setTitle(updatedTask.getTitle());
         existing.setDescription(updatedTask.getDescription());
-        existing.setStatus(parseStatus(updatedTask.getStatus()));
+        if (updatedTask.isStatusPresent()) {
+            existing.setStatus(parseStatus(updatedTask.getStatus()));
+        }
         existing.setPriority(updatedTask.getPriority());
         existing.setUpdatedAt(LocalDateTime.now());
         return toDto(taskRepository.save(existing));
