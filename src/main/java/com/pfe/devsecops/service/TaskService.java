@@ -112,12 +112,16 @@ public class TaskService {
     }
 
     // ============================================================
-    // DTO-based update : la relation user existante reste inchangée
-    // Le statut n'est modifié que si la propriété 'status' est
-    // réellement présente dans la charge utile JSON :
-    //  - absente        -> statut courant conservé
+    // DTO-based update : la relation user existante reste inchangée.
+    // Comportement du statut aligné sur la sémantique observable du
+    // baseline pré-migration (endpoint lié directement à l'entité Task,
+    // dont le champ status portait l'initialiseur TaskStatus.TODO) :
+    //  - absente        -> statut réinitialisé à TaskStatus.TODO
     //  - null explicite -> statut mis à null
     //  - valeur         -> conversion explicite (400 si invalide)
+    // 'statusPresent' reste nécessaire pour distinguer absent de null
+    // explicite, la seule distinction que Jackson n'exprime pas nativement
+    // sur un champ String simple.
     // ============================================================
     public TaskDTO updateTask(Long id, TaskDTO updatedTask) {
         Task existing = taskRepository.findById(id)
@@ -126,6 +130,8 @@ public class TaskService {
         existing.setDescription(updatedTask.getDescription());
         if (updatedTask.isStatusPresent()) {
             existing.setStatus(parseStatus(updatedTask.getStatus()));
+        } else {
+            existing.setStatus(Task.TaskStatus.TODO);
         }
         existing.setPriority(updatedTask.getPriority());
         existing.setUpdatedAt(LocalDateTime.now());
