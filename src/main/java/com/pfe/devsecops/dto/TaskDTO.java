@@ -9,9 +9,9 @@ import java.time.LocalDateTime;
  *
  * <p>This type intentionally contains no persistence imports, annotations or
  * references to persistence entities. The task status is carried as a plain
- * String whose accepted values are TODO, IN_PROGRESS, DONE and CANCELLED;
- * the service layer performs the explicit, type-safe conversion to and from
- * the persistent status representation.</p>
+ * String whose accepted values are the members declared by TaskStatus; the
+ * service layer performs the explicit, type-safe conversion to and from the
+ * persistent status representation.</p>
  *
  * <p>The status field additionally tracks whether it was actually present in
  * the incoming payload, so the service layer can distinguish an omitted
@@ -25,7 +25,7 @@ public class TaskDTO {
 
     private String description;
 
-    /** Task status name: TODO, IN_PROGRESS, DONE or CANCELLED. */
+    /** Task status name: one of the members declared by TaskStatus. */
     private String status;
 
     /**

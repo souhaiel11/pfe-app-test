@@ -40,7 +40,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * Authoritative contract (proven by a differential harness against the
  * ORIGINAL pre-migration baseline commit, not assumed):
- *   ABSENT status        -> persisted status resets to TaskStatus.TODO
+ *   ABSENT status        -> persisted status resets to the model's configured default status
  *   explicit "status":null -> persisted status becomes null
  *   valid status value    -> persisted as the parsed enum value
  *   invalid status value  -> request rejected (400), existing task untouched
