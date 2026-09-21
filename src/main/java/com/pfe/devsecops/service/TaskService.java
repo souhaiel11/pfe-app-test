@@ -115,8 +115,9 @@ public class TaskService {
     // DTO-based update : la relation user existante reste inchangée.
     // Comportement du statut aligné sur la sémantique observable du
     // baseline pré-migration (endpoint lié directement à l'entité Task,
-    // dont le champ status portait l'initialiseur TaskStatus.TODO) :
-    //  - absente        -> statut réinitialisé à TaskStatus.TODO
+    // dont le champ status portait le statut par défaut configuré pour le
+    // modèle) :
+    //  - absente        -> statut réinitialisé au statut par défaut configuré pour le modèle
     //  - null explicite -> statut mis à null
     //  - valeur         -> conversion explicite (400 si invalide)
     // 'statusPresent' reste nécessaire pour distinguer absent de null
