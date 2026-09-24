@@ -61,7 +61,7 @@
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
-            <version>1.2.11</version>
+            <version>1.2.13</version>
         </dependency>
 
         <!-- SnakeYAML 1.29 — CVE-2022-25857 HIGH -->
