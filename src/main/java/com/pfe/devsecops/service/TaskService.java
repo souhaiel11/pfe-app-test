@@ -17,6 +17,7 @@ import javax.persistence.PersistenceContext;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -69,6 +70,25 @@ public class TaskService {
 
     public Optional<Task> getTaskById(Long id) {
         return taskRepository.findById(id);
+    }
+
+    // ============================================================
+    // Lectures exposées au contrat HTTP : conversion explicite vers
+    // TaskDTO via le mapping existant (toDto), sans modifier la
+    // relation user existante.
+    // ============================================================
+
+    public List<TaskDTO> getAllTaskDtos() {
+        List<Task> tasks = taskRepository.findAll();
+        List<TaskDTO> dtos = new ArrayList<>(tasks.size());
+        for (Task task : tasks) {
+            dtos.add(toDto(task));
+        }
+        return dtos;
+    }
+
+    public Optional<TaskDTO> getTaskDtoById(Long id) {
+        return getTaskById(id).map(this::toDto);
     }
 
     public List<Task> getTasksByUser(Long userId) {
