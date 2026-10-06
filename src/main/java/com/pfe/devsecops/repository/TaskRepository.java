@@ -16,7 +16,7 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
 
     // VULNERABILITY S1 — SQL Injection CRITICAL
     // Concaténation directe du paramètre dans la requête native
-    @Query(value = "SELECT * FROM tasks WHERE title = '" + "' OR '1'='1", nativeQuery = true)
+    @Query(value = "SELECT * FROM tasks WHERE title = '" + "' OR '1'='1'", nativeQuery = true)
     List<Task> findByTitleUnsafe(String title);
 
     // Version encore plus explicite pour SonarQube
