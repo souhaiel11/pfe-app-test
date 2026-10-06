@@ -30,25 +30,19 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
-            // VULNERABILITY Z1 — CORS complètement ouvert
-            .cors().and()
-            // Désactiver CSRF (vulnérabilité potentielle)
-            .csrf().disable()
-            .authorizeRequests()
-                .antMatchers("/api/auth/**").permitAll()
-                .antMatchers("/h2-console/**").permitAll()
-                // VULNERABILITY Z4 — pas de restriction sur /api/tasks selon l'identifiant de la tâche
-                // N'importe quel user authentifié peut accéder aux tâches des autres
-                .antMatchers("/api/**").authenticated()
-                .anyRequest().authenticated()
-            .and()
-            .sessionManagement()
-                .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
-            .and()
+            .cors(cors -> {})
+            .csrf(csrf -> csrf.disable())
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/auth/**").permitAll()
+                .requestMatchers("/h2-console/**").permitAll()
+                .requestMatchers("/api/**").authenticated()
+                .anyRequest().authenticated())
+            .sessionManagement(session -> session
+                .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .addFilterBefore(jwtRequestFilter, UsernamePasswordAuthenticationFilter.class);
 
-        // Autoriser H2 console dans les frames (vulnérabilité XSS/clickjacking)
-        http.headers().frameOptions().disable();
+        // Preserve the existing H2 console frame behavior.
+        http.headers(headers -> headers.frameOptions(frame -> frame.disable()));
 
         return http.build();
     }

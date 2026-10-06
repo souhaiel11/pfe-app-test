@@ -62,7 +62,7 @@ class TaskControllerUpdateStatusSemanticsTest {
     @MockBean
     private UserDetailsService userDetailsService;
     @MockBean
-    private javax.persistence.EntityManagerFactory entityManagerFactory;
+    private jakarta.persistence.EntityManagerFactory entityManagerFactory;
 
     private Task existing;
 
