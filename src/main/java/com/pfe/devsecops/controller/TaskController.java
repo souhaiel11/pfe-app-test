@@ -17,16 +17,16 @@ public class TaskController {
     private TaskService taskService;
 
     @GetMapping
-    public ResponseEntity<List<Task>> getAllTasks() {
-        return ResponseEntity.ok(taskService.getAllTasks());
+    public ResponseEntity<List<TaskDTO>> getAllTasks() {
+        return ResponseEntity.ok(taskService.getAllTaskDtos());
     }
 
     // VULNERABILITY Z4 — IDOR : pas de vérification ownership
     // N'importe quel user authentifié peut voir la tâche de n'importe qui
     // en changeant l'id dans l'URL
     @GetMapping("/{id}")
-    public ResponseEntity<Task> getTaskById(@PathVariable Long id) {
-        return taskService.getTaskById(id)
+    public ResponseEntity<TaskDTO> getTaskById(@PathVariable Long id) {
+        return taskService.getTaskDtoById(id)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
