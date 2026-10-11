@@ -16,6 +16,10 @@ import java.time.LocalDateTime;
  * <p>The status field additionally tracks whether it was actually present in
  * the incoming payload, so the service layer can distinguish an omitted
  * status (leave the current value untouched) from an explicit null status.</p>
+ *
+ * <p>Instances are built either through the no-args constructor plus setters
+ * (the path used by the JSON binder) or through {@link #builder()}, which
+ * applies the very same setters and therefore keeps identical semantics.</p>
  */
 public class TaskDTO {
 
@@ -46,23 +50,11 @@ public class TaskDTO {
         // Default constructor for JSON deserialization.
     }
 
-    public TaskDTO(Long id,
-                   String title,
-                   String description,
-                   String status,
-                   Integer priority,
-                   LocalDateTime createdAt,
-                   LocalDateTime updatedAt,
-                   Long userId) {
-        this.id = id;
-        this.title = title;
-        this.description = description;
-        this.status = status;
-        this.statusPresent = true;
-        this.priority = priority;
-        this.createdAt = createdAt;
-        this.updatedAt = updatedAt;
-        this.userId = userId;
+    /**
+     * @return a new fluent builder for this DTO.
+     */
+    public static Builder builder() {
+        return new Builder();
     }
 
     public Long getId() {
@@ -136,5 +128,68 @@ public class TaskDTO {
 
     public void setUserId(Long userId) {
         this.userId = userId;
+    }
+
+    /**
+     * Fluent builder that populates a {@link TaskDTO} exclusively through its
+     * public setters, so the status presence tracking behaves exactly as it
+     * does for programmatic setter usage.
+     */
+    public static final class Builder {
+
+        private final TaskDTO target = new TaskDTO();
+
+        private Builder() {
+            // Instantiated through TaskDTO.builder().
+        }
+
+        public Builder id(Long id) {
+            target.setId(id);
+            return this;
+        }
+
+        public Builder title(String title) {
+            target.setTitle(title);
+            return this;
+        }
+
+        public Builder description(String description) {
+            target.setDescription(description);
+            return this;
+        }
+
+        /**
+         * Supplies the status name and marks it as explicitly provided.
+         *
+         * @param status one of the members declared by TaskStatus.
+         */
+        public Builder status(String status) {
+            target.setStatus(status);
+            return this;
+        }
+
+        public Builder priority(Integer priority) {
+            target.setPriority(priority);
+            return this;
+        }
+
+        public Builder createdAt(LocalDateTime createdAt) {
+            target.setCreatedAt(createdAt);
+            return this;
+        }
+
+        public Builder updatedAt(LocalDateTime updatedAt) {
+            target.setUpdatedAt(updatedAt);
+            return this;
+        }
+
+        public Builder userId(Long userId) {
+            target.setUserId(userId);
+            return this;
+        }
+
+        public TaskDTO build() {
+            return target;
+        }
     }
 }
