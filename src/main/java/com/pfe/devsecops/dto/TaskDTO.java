@@ -16,6 +16,10 @@ import java.time.LocalDateTime;
  * <p>The status field additionally tracks whether it was actually present in
  * the incoming payload, so the service layer can distinguish an omitted
  * status (leave the current value untouched) from an explicit null status.</p>
+ *
+ * <p>Instances are created either with the no-arg constructor plus setters
+ * (used by the JSON binder) or through {@link #builder()}, which provides a
+ * fluent construction API for all fields.</p>
  */
 public class TaskDTO {
 
@@ -46,23 +50,11 @@ public class TaskDTO {
         // Default constructor for JSON deserialization.
     }
 
-    public TaskDTO(Long id,
-                   String title,
-                   String description,
-                   String status,
-                   Integer priority,
-                   LocalDateTime createdAt,
-                   LocalDateTime updatedAt,
-                   Long userId) {
-        this.id = id;
-        this.title = title;
-        this.description = description;
-        this.status = status;
-        this.statusPresent = true;
-        this.priority = priority;
-        this.createdAt = createdAt;
-        this.updatedAt = updatedAt;
-        this.userId = userId;
+    /**
+     * @return a new fluent builder for this type.
+     */
+    public static Builder builder() {
+        return new Builder();
     }
 
     public Long getId() {
@@ -136,5 +128,63 @@ public class TaskDTO {
 
     public void setUserId(Long userId) {
         this.userId = userId;
+    }
+
+    /**
+     * Fluent builder replacing the former wide all-args constructor. Supplying
+     * the status through {@link #status(String)} marks the status as explicitly
+     * present, exactly like the setter does.
+     */
+    public static final class Builder {
+
+        private final TaskDTO instance = new TaskDTO();
+
+        private Builder() {
+            // Instantiated through TaskDTO.builder().
+        }
+
+        public Builder id(Long id) {
+            instance.setId(id);
+            return this;
+        }
+
+        public Builder title(String title) {
+            instance.setTitle(title);
+            return this;
+        }
+
+        public Builder description(String description) {
+            instance.setDescription(description);
+            return this;
+        }
+
+        public Builder status(String status) {
+            instance.setStatus(status);
+            return this;
+        }
+
+        public Builder priority(Integer priority) {
+            instance.setPriority(priority);
+            return this;
+        }
+
+        public Builder createdAt(LocalDateTime createdAt) {
+            instance.setCreatedAt(createdAt);
+            return this;
+        }
+
+        public Builder updatedAt(LocalDateTime updatedAt) {
+            instance.setUpdatedAt(updatedAt);
+            return this;
+        }
+
+        public Builder userId(Long userId) {
+            instance.setUserId(userId);
+            return this;
+        }
+
+        public TaskDTO build() {
+            return instance;
+        }
     }
 }
